@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: code-server-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: code-server
+  template:
+    metadata:
+      labels:
+        app: code-server
+    spec:
+      containers:
+      - name: code-server
+        image: linuxserver/code-server
+        ports:
+        - containerPort: 8443
+        env:
+        - name: PUID
+          value: "1000"
+        - name: PGID
+          value: "1000"
+        - name: TZ
+          value: Etc/UTC
+        - name: PASSWORD
+          value: password
+        - name: SUDO_PASSWORD
+          value: password
+        volumeMounts:
+        - name: code-server-config
+          mountPath: /config/workspace
+      - name: redis
+        image: redis:latest
+        ports:
+        - containerPort: 6379
+      volumes:
+      - name: code-server-config
+        persistentVolumeClaim:
+          claimName: code-server-pvc
+
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: code-server-pv
+spec:
+  capacity:
+    storage: 50Mi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: /root
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: code-server-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Mi
+
