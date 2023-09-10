@@ -23,13 +23,15 @@ func InitSession(rc *redis.Client, kcs *kubernetes.Clientset, sessionID string) 
 	return nil
 }
 
-func CreateDevEnv(rc *redis.Client, sessionID string) error {
-	return nil
+func CreateDevEnv(rc *redis.Client, kcs *kubernetes.Clientset, components []Component, sessionID string) error {
+	return CreateDeploy(kcs, rc, sessionID, components)
 }
 
 func GetDevEnv(rc *redis.Client, sessionID string) error {
 	return nil
 }
+
+func StopDevEnv()
 
 func DeleteDevEnv(sessionID string) error {
 	return nil

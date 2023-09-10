@@ -2,7 +2,12 @@ package helpers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/redis/go-redis/v9"
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -11,8 +16,6 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
-	"os"
-	"path/filepath"
 )
 
 func GetK8sClient() (*kubernetes.Clientset, error) {
@@ -95,14 +98,23 @@ const (
 	Mongo
 )
 
+type ComponentState int64
+
+const (
+	UndefinedComponent ComponentState = iota
+	Initializing
+	Ready
+)
+
 type ComponentMetadata struct {
 	Password *string
 }
 
 type Component struct {
-	ComponentType     ComponentType
-	ComponentID       string
-	ComponentMetadata *ComponentMetadata
+	ComponentType     ComponentType      `json:"componentType"`
+	ComponentID       string             `json:"componentID"`
+	ComponentMetadata *ComponentMetadata `json:"-"`
+	ComponentState    ComponentState     `json:"componentState"`
 }
 
 func (c Component) ToContainer(sessionID string) (*v1.Container, *v1.Volume, error) {
@@ -217,16 +229,30 @@ func ParseComponents(components []Component, sessionID string) ([]*v1.Container,
 	return containers, volumes, nil
 }
 
-func CreateDeploy(cs *kubernetes.Clientset, sessionID string, components []Component) error {
+type SessionState int64
+
+const (
+	UndefinedSession SessionState = iota
+	Initialized
+	Running
+	Stopped
+)
+
+type SessionInfo struct {
+	sessionState SessionState `json:"sessionState"`
+	components   []Component  `json:"components"`
+}
+
+func CreateDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string, components []Component) error {
 	var replicas *int32
 	replicas = new(int32)
 	*replicas = 1
 	containers, volumes, err := ParseComponents(components, sessionID)
-    if err != nil {
-        return err
-    }
+	if err != nil {
+		return err
+	}
 
-    // create persistant volumes and persistant volume claims for each volume
+	// create persistant volumes and persistant volume claims for each volume
 	for _, volume := range volumes {
 		if volume.Name == sessionID {
 			continue
@@ -276,10 +302,119 @@ func CreateDeploy(cs *kubernetes.Clientset, sessionID string, components []Compo
 			},
 		},
 	}
-    fmt.Println(volumes)
-    fmt.Println(volumeValues)
 
 	// Create the Deployment
 	_, err = cs.AppsV1().Deployments("default").Create(context.TODO(), deployment, metav1.CreateOptions{})
+	if err != nil {
+		return err
+	}
+	sessionJSON, _ := json.Marshal(SessionInfo{
+		sessionState: Initialized,
+		components:   components,
+	})
+	_, err = rc.Set(
+		context.TODO(),
+		sessionID,
+		string(sessionJSON),
+		0).Result()
 	return err
+}
+
+func refreshDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string) (*SessionInfo, error) {
+	return nil, nil
+}
+
+func ToggleDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string) error {
+	sessionJSON, err := rc.Get(context.TODO(), sessionID).Result()
+	if err != nil {
+		return err
+	}
+	var session SessionInfo
+	err = json.Unmarshal([]byte(sessionJSON), &session)
+
+	if session.sessionState == Running {
+		// toggle off
+		return cs.AppsV1().Deployments("default").Delete(context.TODO(), sessionID, metav1.DeleteOptions{})
+	} else if session.sessionState == Stopped {
+		// toggle on
+		var replicas *int32
+		replicas = new(int32)
+		*replicas = 1
+		containers, volumes, err := ParseComponents(session.components, sessionID)
+		if err != nil {
+			return err
+		}
+
+		containerValues := make([]v1.Container, len(containers))
+		volumeValues := make([]v1.Volume, len(volumes))
+
+		for i, container := range containers {
+			containerValues[i] = *container
+		}
+
+		for i, volume := range volumes {
+			volumeValues[i] = *volume
+		}
+
+		deployment := &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: sessionID,
+			},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: replicas,
+				Selector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{
+						"app": sessionID,
+					},
+				},
+				Template: v1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{
+						Labels: map[string]string{
+							"app": sessionID,
+						},
+					},
+					Spec: v1.PodSpec{
+						Containers: containerValues,
+						Volumes:    volumeValues,
+					},
+				},
+			},
+		}
+
+		// Create the Deployment
+		_, err = cs.AppsV1().Deployments("default").Create(context.TODO(), deployment, metav1.CreateOptions{})
+		return err
+	} else {
+		// session is neither Running nor Stopped
+		// in this case it is still Initializing
+		// session cannot be toggled ON or  OFF while Initializing
+		return fmt.Errorf("session %s is still Initializing", sessionID)
+	}
+}
+
+func DeleteDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string) error {
+    err := cs.AppsV1().Deployments("default").Delete(context.TODO(), sessionID, metav1.DeleteOptions{})
+    if err != nil {
+        return err
+    }
+	sessionJSON, err := rc.Get(context.TODO(), sessionID).Result()
+	if err != nil {
+		return err
+	}
+	var session SessionInfo
+	err = json.Unmarshal([]byte(sessionJSON), &session)
+	_, volumes, err := ParseComponents(session.components, sessionID)
+	if err != nil {
+		return err
+	}
+	for _, volume := range volumes {
+		err = cs.CoreV1().PersistentVolumeClaims("default").Delete(
+			context.TODO(),
+			volume.VolumeSource.PersistentVolumeClaim.ClaimName,
+			metav1.DeleteOptions{})
+        if err != nil {
+            return err
+        }
+	}
+	return nil
 }
