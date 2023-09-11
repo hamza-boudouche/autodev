@@ -107,14 +107,14 @@ const (
 )
 
 type ComponentMetadata struct {
-	Password *string
+	Password string
 }
 
 type Component struct {
-	ComponentType     ComponentType      `json:"componentType"`
-	ComponentID       string             `json:"componentID"`
-	ComponentMetadata *ComponentMetadata `json:"-"`
-	ComponentState    ComponentState     `json:"componentState"`
+	ComponentType     ComponentType     `json:"componentType"`
+	ComponentID       string            `json:"componentID"`
+	ComponentMetadata ComponentMetadata `json:"componentMetadata"`
+	ComponentState    ComponentState    `json:"componentState"`
 }
 
 func (c Component) ToContainer(sessionID string) (*v1.Container, *v1.Volume, error) {
@@ -142,7 +142,7 @@ func (c Component) ToContainer(sessionID string) (*v1.Container, *v1.Volume, err
 					},
 					{
 						Name:  "PASSWORD",
-						Value: *c.ComponentMetadata.Password,
+						Value: c.ComponentMetadata.Password,
 					},
 					{
 						Name:  "SUDO_PASSWORD",
@@ -232,15 +232,14 @@ func ParseComponents(components []Component, sessionID string) ([]*v1.Container,
 type SessionState int64
 
 const (
-	UndefinedSession SessionState = iota
-	Initialized
+	Initialized SessionState = iota
 	Running
 	Stopped
 )
 
 type SessionInfo struct {
-	sessionState SessionState `json:"sessionState"`
-	components   []Component  `json:"components"`
+	SessionState SessionState `json:"sessionState"`
+	Components   []Component  `json:"components"`
 }
 
 func CreateDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string, components []Component) error {
@@ -309,8 +308,8 @@ func CreateDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string, 
 		return err
 	}
 	sessionJSON, _ := json.Marshal(SessionInfo{
-		sessionState: Initialized,
-		components:   components,
+		SessionState: Initialized,
+		Components:   components,
 	})
 	_, err = rc.Set(
 		context.TODO(),
@@ -320,7 +319,79 @@ func CreateDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string, 
 	return err
 }
 
-func refreshDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string) (*SessionInfo, error) {
+func RefreshDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string) (*SessionInfo, error) {
+	// get stored SessionInfo
+	sessionJSON, err := rc.Get(context.TODO(), sessionID).Result()
+	if err != nil {
+		return nil, err
+	}
+	var session SessionInfo
+	err = json.Unmarshal([]byte(sessionJSON), &session)
+	if err != nil {
+		return nil, err
+	}
+	if session.SessionState == Initialized {
+		deployment, err := cs.AppsV1().Deployments("default").Get(context.TODO(), sessionID, metav1.GetOptions{})
+		if err != nil {
+			// deployment not found
+			// TODO: check the type of this error to see if it concerns anything another than the deployment not being found
+			return nil, err
+		}
+		if deployment.Status.ReadyReplicas == 1 {
+			// deployment is ready
+			session.SessionState = Running
+			sessionJSON, _ := json.Marshal(session)
+			_, err = rc.Set(
+				context.TODO(),
+				sessionID,
+				string(sessionJSON),
+				0).Result()
+			return &session, err
+		} else {
+			return &session, nil
+		}
+	} else if session.SessionState == Running {
+		deployment, err := cs.AppsV1().Deployments("default").Get(context.TODO(), sessionID, metav1.GetOptions{})
+		if err != nil {
+			// deployment not found
+			// TODO: check the type of this error to see if it concerns anything another than the deployment not being found
+			return nil, err
+		}
+		if deployment.Status.ReadyReplicas == 1 {
+			// deployment is still ready
+			return &session, err
+		} else {
+			_, volumes, _ := ParseComponents(session.Components, sessionID)
+			for _, volume := range volumes {
+				_, err := cs.CoreV1().PersistentVolumeClaims("default").Get(context.TODO(), volume.Name, metav1.GetOptions{})
+				if err != nil {
+					// the pvc was not found
+					// the session was deleted
+					// delete from cache
+					_, err = rc.Del(
+						context.TODO(),
+						sessionID).Result()
+					return nil, err
+				}
+			}
+			return &session, nil
+		}
+	} else if session.SessionState == Stopped {
+		_, volumes, _ := ParseComponents(session.Components, sessionID)
+		for _, volume := range volumes {
+			_, err := cs.CoreV1().PersistentVolumeClaims("default").Get(context.TODO(), volume.Name, metav1.GetOptions{})
+			if err != nil {
+				// the pvc was not found
+				// the session was deleted
+				// delete from cache
+				_, err = rc.Del(
+					context.TODO(),
+					sessionID).Result()
+				return nil, err
+			}
+		}
+		return &session, nil
+	}
 	return nil, nil
 }
 
@@ -332,15 +403,26 @@ func ToggleDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string) 
 	var session SessionInfo
 	err = json.Unmarshal([]byte(sessionJSON), &session)
 
-	if session.sessionState == Running {
+	if session.SessionState == Running {
 		// toggle off
-		return cs.AppsV1().Deployments("default").Delete(context.TODO(), sessionID, metav1.DeleteOptions{})
-	} else if session.sessionState == Stopped {
+		err = cs.AppsV1().Deployments("default").Delete(context.TODO(), sessionID, metav1.DeleteOptions{})
+		if err != nil {
+			return err
+		}
+		session.SessionState = Stopped
+		sessionJSON, _ := json.Marshal(session)
+		_, err = rc.Set(
+			context.TODO(),
+			sessionID,
+			string(sessionJSON),
+			0).Result()
+		return err
+	} else if session.SessionState == Stopped {
 		// toggle on
 		var replicas *int32
 		replicas = new(int32)
 		*replicas = 1
-		containers, volumes, err := ParseComponents(session.components, sessionID)
+		containers, volumes, err := ParseComponents(session.Components, sessionID)
 		if err != nil {
 			return err
 		}
@@ -383,6 +465,16 @@ func ToggleDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string) 
 
 		// Create the Deployment
 		_, err = cs.AppsV1().Deployments("default").Create(context.TODO(), deployment, metav1.CreateOptions{})
+		if err != nil {
+			return err
+		}
+		session.SessionState = Running
+		sessionJSON, _ := json.Marshal(session)
+		_, err = rc.Set(
+			context.TODO(),
+			sessionID,
+			string(sessionJSON),
+			0).Result()
 		return err
 	} else {
 		// session is neither Running nor Stopped
@@ -393,17 +485,14 @@ func ToggleDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string) 
 }
 
 func DeleteDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string) error {
-    err := cs.AppsV1().Deployments("default").Delete(context.TODO(), sessionID, metav1.DeleteOptions{})
-    if err != nil {
-        return err
-    }
+	cs.AppsV1().Deployments("default").Delete(context.TODO(), sessionID, metav1.DeleteOptions{})
 	sessionJSON, err := rc.Get(context.TODO(), sessionID).Result()
 	if err != nil {
 		return err
 	}
 	var session SessionInfo
 	err = json.Unmarshal([]byte(sessionJSON), &session)
-	_, volumes, err := ParseComponents(session.components, sessionID)
+	_, volumes, err := ParseComponents(session.Components, sessionID)
 	if err != nil {
 		return err
 	}
@@ -412,9 +501,12 @@ func DeleteDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string) 
 			context.TODO(),
 			volume.VolumeSource.PersistentVolumeClaim.ClaimName,
 			metav1.DeleteOptions{})
-        if err != nil {
-            return err
-        }
+		if err != nil {
+			return err
+		}
 	}
-	return nil
+	_, err = rc.Del(
+		context.TODO(),
+		sessionID).Result()
+	return err
 }

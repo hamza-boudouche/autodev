@@ -31,7 +31,9 @@ func GetDevEnv(rc *redis.Client, sessionID string) error {
 	return nil
 }
 
-func StopDevEnv()
+func StopDevEnv() error {
+    return nil
+}
 
 func DeleteDevEnv(sessionID string) error {
 	return nil
