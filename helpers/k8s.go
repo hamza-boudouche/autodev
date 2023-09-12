@@ -3,6 +3,7 @@ package helpers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -89,6 +90,23 @@ func CreatePVC(cs *kubernetes.Clientset, name string, capacity string) error {
 	return err
 }
 
+func InitSession(rc *redis.Client, kcs *kubernetes.Clientset, sessionID string) error {
+	_, err := rc.Get(context.TODO(), sessionID).Result()
+	if err == redis.Nil {
+		// session has not been initialized before, proceed to initialize
+		rc.Set(context.TODO(), sessionID, 1, 0)
+		// if err := CreatePV(kcs, sessionID, "10Mi"); err != nil {
+		// 	return err
+		// }
+		return CreatePVC(kcs, sessionID, "10Mi")
+	} else if err != nil {
+		// some error other than key not found occured, abort
+		return err
+	}
+	// session was found, no need to initialize again
+	return nil
+}
+
 type ComponentType int64
 
 const (
@@ -108,6 +126,7 @@ const (
 
 type ComponentMetadata struct {
 	Password string
+    Url string
 }
 
 type Component struct {
@@ -243,6 +262,14 @@ type SessionInfo struct {
 }
 
 func CreateDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string, components []Component) error {
+    sessionState, err := rc.Get(context.TODO(), sessionID).Result()
+    if err != nil {
+        return err
+    }
+    if sessionState != "1" {
+        // session hasn't been just created
+        return errors.New(fmt.Sprintf("session %s is already populated, delete and reinitialize first", sessionID))
+    }
 	var replicas *int32
 	replicas = new(int32)
 	*replicas = 1
@@ -402,6 +429,9 @@ func ToggleDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string) 
 	}
 	var session SessionInfo
 	err = json.Unmarshal([]byte(sessionJSON), &session)
+    if err != nil {
+        return err
+    }
 
 	if session.SessionState == Running {
 		// toggle off
