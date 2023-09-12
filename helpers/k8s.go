@@ -7,12 +7,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/redis/go-redis/v9"
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -90,6 +93,56 @@ func CreatePVC(cs *kubernetes.Clientset, name string, capacity string) error {
 	return err
 }
 
+func ExposeSession(cs *kubernetes.Clientset, sessionID string, ingressName string) (string, error) {
+	// creating the service
+	service := &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: sessionID,
+		},
+		Spec: v1.ServiceSpec{
+			Selector: map[string]string{
+				"app": sessionID,
+			},
+			Ports: []v1.ServicePort{
+				{
+					Port:       80,
+					TargetPort: intstr.FromInt(8080),
+				},
+			},
+			Type: v1.ServiceTypeClusterIP,
+		},
+	}
+	_, err := cs.CoreV1().Services("default").Create(context.TODO(), service, metav1.CreateOptions{})
+	if err != nil {
+		return "", errors.New(fmt.Sprintf("failed to create service for session %s", sessionID))
+	}
+
+    // update ingress with a new entry
+	ingress, err := cs.NetworkingV1().Ingresses("default").Get(context.TODO(), ingressName, metav1.GetOptions{})
+	if err != nil {
+		return "", errors.New(fmt.Sprintf("failed to get ingress %s", ingressName))
+	}
+    pathType := networkingv1.PathTypePrefix
+	newPath := networkingv1.HTTPIngressPath{
+		Path:     fmt.Sprintf("/session/%s", sessionID), // Replace with the desired path
+		PathType: &pathType,
+		Backend: networkingv1.IngressBackend{
+			Service: &networkingv1.IngressServiceBackend{
+				Name: sessionID,
+				Port: networkingv1.ServiceBackendPort{
+					Number: 80,
+				},
+			},
+		},
+	}
+    ingress.Spec.Rules[0].HTTP.Paths = append(ingress.Spec.Rules[0].HTTP.Paths, newPath)
+    _, err = cs.NetworkingV1().Ingresses("default").Update(context.TODO(), ingress, metav1.UpdateOptions{})
+    if err != nil {
+        return "", fmt.Errorf("failed to update the ingress %s with a new path for the session %s", ingressName, sessionID)
+    }
+    return fmt.Sprintf("www.hamzaboudouche.tech/session/%s", sessionID), nil
+}
+
 func InitSession(rc *redis.Client, kcs *kubernetes.Clientset, sessionID string) error {
 	_, err := rc.Get(context.TODO(), sessionID).Result()
 	if err == redis.Nil {
@@ -126,7 +179,7 @@ const (
 
 type ComponentMetadata struct {
 	Password string
-    Url string
+	Url      string
 }
 
 type Component struct {
@@ -262,14 +315,14 @@ type SessionInfo struct {
 }
 
 func CreateDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string, components []Component) error {
-    sessionState, err := rc.Get(context.TODO(), sessionID).Result()
-    if err != nil {
-        return err
-    }
-    if sessionState != "1" {
-        // session hasn't been just created
-        return errors.New(fmt.Sprintf("session %s is already populated, delete and reinitialize first", sessionID))
-    }
+	sessionState, err := rc.Get(context.TODO(), sessionID).Result()
+	if err != nil {
+		return err
+	}
+	if sessionState != "1" {
+		// session hasn't been just created
+		return errors.New(fmt.Sprintf("session %s is already populated, delete and reinitialize first", sessionID))
+	}
 	var replicas *int32
 	replicas = new(int32)
 	*replicas = 1
@@ -334,6 +387,14 @@ func CreateDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string, 
 	if err != nil {
 		return err
 	}
+
+    // expose the deployment
+    ideUrl, err := ExposeSession(cs, sessionID, "minimal-ingress")
+    if err != nil {
+        return err
+    }
+    components[0].ComponentMetadata.Url = ideUrl
+
 	sessionJSON, _ := json.Marshal(SessionInfo{
 		SessionState: Initialized,
 		Components:   components,
@@ -429,9 +490,9 @@ func ToggleDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string) 
 	}
 	var session SessionInfo
 	err = json.Unmarshal([]byte(sessionJSON), &session)
-    if err != nil {
-        return err
-    }
+	if err != nil {
+		return err
+	}
 
 	if session.SessionState == Running {
 		// toggle off
@@ -535,6 +596,25 @@ func DeleteDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string) 
 			return err
 		}
 	}
+
+    ingress, err := cs.NetworkingV1().Ingresses("default").Get(context.TODO(), "minimal-ingress", metav1.GetOptions{})
+    if err != nil {
+        return fmt.Errorf("failed to get the ingress %s", "minimal-ingress")
+    }
+    var filteredPaths []networkingv1.HTTPIngressPath
+    for _, path := range ingress.Spec.Rules[0].HTTP.Paths {
+        if ! strings.HasSuffix(path.Path, sessionID) {
+            filteredPaths = append(filteredPaths, path)
+        }
+    }
+    ingress.Spec.Rules[0].HTTP.Paths = filteredPaths
+
+    _, err = cs.NetworkingV1().Ingresses("default").Update(context.TODO(), ingress, metav1.UpdateOptions{})
+
+    if err != nil {
+        return fmt.Errorf("failed to update ingress %s", "minimal-ingress")
+    }
+
 	_, err = rc.Del(
 		context.TODO(),
 		sessionID).Result()
