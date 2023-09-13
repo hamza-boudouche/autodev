@@ -105,8 +105,8 @@ func ExposeSession(cs *kubernetes.Clientset, sessionID string, ingressName strin
 			},
 			Ports: []v1.ServicePort{
 				{
-					Port:       80,
-					TargetPort: intstr.FromInt(8080),
+					Port:       8443,
+					TargetPort: intstr.FromInt(8443),
 				},
 			},
 			Type: v1.ServiceTypeClusterIP,
@@ -117,30 +117,41 @@ func ExposeSession(cs *kubernetes.Clientset, sessionID string, ingressName strin
 		return "", errors.New(fmt.Sprintf("failed to create service for session %s", sessionID))
 	}
 
-    // update ingress with a new entry
+	// update ingress with a new entry
 	ingress, err := cs.NetworkingV1().Ingresses("default").Get(context.TODO(), ingressName, metav1.GetOptions{})
 	if err != nil {
 		return "", errors.New(fmt.Sprintf("failed to get ingress %s", ingressName))
 	}
-    pathType := networkingv1.PathTypePrefix
-	newPath := networkingv1.HTTPIngressPath{
-		Path:     fmt.Sprintf("/session/%s", sessionID), // Replace with the desired path
-		PathType: &pathType,
-		Backend: networkingv1.IngressBackend{
-			Service: &networkingv1.IngressServiceBackend{
-				Name: sessionID,
-				Port: networkingv1.ServiceBackendPort{
-					Number: 80,
+	pathType := networkingv1.PathTypePrefix
+
+	newRule := networkingv1.IngressRule{
+		Host: fmt.Sprintf("%s.hamzaboudouche.tech", sessionID),
+		IngressRuleValue: networkingv1.IngressRuleValue{
+			HTTP: &networkingv1.HTTPIngressRuleValue{
+				Paths: []networkingv1.HTTPIngressPath{
+					{
+						Path:     "/", // Replace with the desired path
+						PathType: &pathType,
+						Backend: networkingv1.IngressBackend{
+							Service: &networkingv1.IngressServiceBackend{
+								Name: sessionID,
+								Port: networkingv1.ServiceBackendPort{
+									Number: 8443,
+								},
+							},
+						},
+					},
 				},
 			},
 		},
 	}
-    ingress.Spec.Rules[0].HTTP.Paths = append(ingress.Spec.Rules[0].HTTP.Paths, newPath)
-    _, err = cs.NetworkingV1().Ingresses("default").Update(context.TODO(), ingress, metav1.UpdateOptions{})
-    if err != nil {
-        return "", fmt.Errorf("failed to update the ingress %s with a new path for the session %s", ingressName, sessionID)
-    }
-    return fmt.Sprintf("www.hamzaboudouche.tech/session/%s", sessionID), nil
+
+	ingress.Spec.Rules = append(ingress.Spec.Rules, newRule)
+	_, err = cs.NetworkingV1().Ingresses("default").Update(context.TODO(), ingress, metav1.UpdateOptions{})
+	if err != nil {
+		return "", fmt.Errorf("failed to update the ingress %s with a new rule for the session %s", ingressName, sessionID)
+	}
+	return fmt.Sprintf("%s.hamzaboudouche.tech/", sessionID), nil
 }
 
 func InitSession(rc *redis.Client, kcs *kubernetes.Clientset, sessionID string) error {
@@ -388,12 +399,12 @@ func CreateDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string, 
 		return err
 	}
 
-    // expose the deployment
-    ideUrl, err := ExposeSession(cs, sessionID, "minimal-ingress")
-    if err != nil {
-        return err
-    }
-    components[0].ComponentMetadata.Url = ideUrl
+	// expose the deployment
+	ideUrl, err := ExposeSession(cs, sessionID, "minimal-ingress")
+	if err != nil {
+		return err
+	}
+	components[0].ComponentMetadata.Url = ideUrl
 
 	sessionJSON, _ := json.Marshal(SessionInfo{
 		SessionState: Initialized,
@@ -597,23 +608,25 @@ func DeleteDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string) 
 		}
 	}
 
-    ingress, err := cs.NetworkingV1().Ingresses("default").Get(context.TODO(), "minimal-ingress", metav1.GetOptions{})
-    if err != nil {
-        return fmt.Errorf("failed to get the ingress %s", "minimal-ingress")
-    }
-    var filteredPaths []networkingv1.HTTPIngressPath
-    for _, path := range ingress.Spec.Rules[0].HTTP.Paths {
-        if ! strings.HasSuffix(path.Path, sessionID) {
-            filteredPaths = append(filteredPaths, path)
-        }
-    }
-    ingress.Spec.Rules[0].HTTP.Paths = filteredPaths
+	_ = cs.CoreV1().Services("default").Delete(context.TODO(), sessionID, metav1.DeleteOptions{})
 
-    _, err = cs.NetworkingV1().Ingresses("default").Update(context.TODO(), ingress, metav1.UpdateOptions{})
+	ingress, err := cs.NetworkingV1().Ingresses("default").Get(context.TODO(), "minimal-ingress", metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get the ingress %s", "minimal-ingress")
+	}
+	var filteredRules []networkingv1.IngressRule
+	for _, rule := range ingress.Spec.Rules {
+		if !strings.HasPrefix(rule.Host, sessionID) {
+			filteredRules = append(filteredRules, rule)
+		}
+	}
+	ingress.Spec.Rules = filteredRules
 
-    if err != nil {
-        return fmt.Errorf("failed to update ingress %s", "minimal-ingress")
-    }
+	_, err = cs.NetworkingV1().Ingresses("default").Update(context.TODO(), ingress, metav1.UpdateOptions{})
+
+	if err != nil {
+		return fmt.Errorf("failed to update ingress %s", "minimal-ingress")
+	}
 
 	_, err = rc.Del(
 		context.TODO(),
