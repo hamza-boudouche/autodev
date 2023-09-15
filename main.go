@@ -58,6 +58,22 @@ func main() {
 		})
 	})
 
+    r.GET("/statuses/:sessionID", func(c *gin.Context) {
+		sessionID := strings.ReplaceAll(c.Param("sessionID"), "/", "")
+        containerStatuses, err := helpers.ContainerStatus(kcs, sessionID)
+        if err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{
+                "error": err.Error(),
+            })
+            return
+        }
+        c.JSON(http.StatusOK, gin.H{
+            "message": fmt.Sprintf("session %s container statuses fetched successfully", sessionID),
+            "result": containerStatuses,
+        })
+
+    })
+
 	r.POST("/refresh/:sessionID", func(c *gin.Context) {
 		sessionID := strings.ReplaceAll(c.Param("sessionID"), "/", "")
 		sessionInfo, err := helpers.RefreshDeploy(kcs, rc, sessionID)

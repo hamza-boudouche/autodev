@@ -101,7 +101,7 @@ func ExposeSession(cs *kubernetes.Clientset, sessionID string, components []Comp
 			ports = append(ports, v1.ServicePort{
 				Port:       int32(component.GetPublicPort()),
 				TargetPort: intstr.FromInt(component.GetPublicPort()),
-                Name: component.ComponentID,
+				Name:       component.ComponentID,
 			})
 		}
 	}
@@ -132,8 +132,8 @@ func ExposeSession(cs *kubernetes.Clientset, sessionID string, components []Comp
 	rules := make([]networkingv1.IngressRule, 0, len(ports))
 	for i, component := range components {
 		if component.ExposeComponent {
-            url := fmt.Sprintf("%s.%s.hamzaboudouche.tech", sessionID, component.ComponentID)
-            components[i].ComponentMetadata.Url = url
+			url := fmt.Sprintf("%s.%s.hamzaboudouche.tech", sessionID, component.ComponentID)
+			components[i].ComponentMetadata.Url = url
 			rules = append(rules, networkingv1.IngressRule{
 				Host: url,
 				IngressRuleValue: networkingv1.IngressRuleValue{
@@ -195,9 +195,9 @@ const (
 type ComponentState int64
 
 const (
-	UndefinedComponent ComponentState = iota
-	Initializing
+	Initializing ComponentState = iota
 	Ready
+	Terminated
 )
 
 type ComponentMetadata struct {
@@ -229,7 +229,7 @@ func (c Component) GetPublicPort() int {
 func (c Component) ToContainer(sessionID string) (*v1.Container, *v1.Volume, error) {
 	if c.ComponentType == Code {
 		return &v1.Container{
-				Name:  fmt.Sprintf("%s-code-server", c.ComponentID),
+				Name:  c.ComponentID,
 				Image: "linuxserver/code-server",
 				Ports: []v1.ContainerPort{
 					{
@@ -274,7 +274,7 @@ func (c Component) ToContainer(sessionID string) (*v1.Container, *v1.Volume, err
 			}, nil
 	} else if c.ComponentType == Redis {
 		return &v1.Container{
-				Name:  "redis",
+				Name:  c.ComponentID,
 				Image: "redis:latest",
 				Ports: []v1.ContainerPort{
 					{
@@ -297,7 +297,7 @@ func (c Component) ToContainer(sessionID string) (*v1.Container, *v1.Volume, err
 			}, nil
 	} else if c.ComponentType == Mongo {
 		return &v1.Container{
-				Name:  "mongodb",
+				Name:  c.ComponentID,
 				Image: "mongo:latest",
 				Ports: []v1.ContainerPort{
 					{
@@ -441,6 +441,43 @@ func CreateDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string, 
 		string(sessionJSON),
 		0).Result()
 	return err
+}
+
+func ContainerStatus(cs *kubernetes.Clientset, sessionID string) (map[string]ComponentState, error) {
+	_, err := cs.AppsV1().Deployments("default").Get(context.TODO(), sessionID, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get deployment for session: %s", sessionID)
+	}
+	pods, err := cs.CoreV1().Pods("default").List(
+		context.TODO(),
+		metav1.ListOptions{
+			LabelSelector: fmt.Sprintf("app=%s", sessionID),
+		},
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to get pods for session: %s", sessionID)
+	}
+
+	if len(pods.Items) == 0 {
+		return nil, nil
+	}
+
+    res :=make(map[string]ComponentState, len(pods.Items[0].Status.ContainerStatuses))
+
+	for _, containerStatus := range pods.Items[0].Status.ContainerStatuses {
+		if containerStatus.State.Running != nil {
+			// container is running
+		    res[containerStatus.Name] = Ready
+		} else if containerStatus.State.Terminated != nil {
+            // container is waiting
+            res[containerStatus.Name] = Terminated
+        } else {
+            // container is not ready yet
+            res[containerStatus.Name] = Initializing
+        }
+	}
+    return res, nil
 }
 
 func RefreshDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string) (*SessionInfo, error) {
