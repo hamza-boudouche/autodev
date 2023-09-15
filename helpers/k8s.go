@@ -93,7 +93,18 @@ func CreatePVC(cs *kubernetes.Clientset, name string, capacity string) error {
 	return err
 }
 
-func ExposeSession(cs *kubernetes.Clientset, sessionID string, ingressName string) (string, error) {
+func ExposeSession(cs *kubernetes.Clientset, sessionID string, components []Component, ingressName string) ([]Component, error) {
+	// create all the port that need to be exposed
+	ports := make([]v1.ServicePort, 0, len(components))
+	for _, component := range components {
+		if component.ExposeComponent {
+			ports = append(ports, v1.ServicePort{
+				Port:       int32(component.GetPublicPort()),
+				TargetPort: intstr.FromInt(component.GetPublicPort()),
+                Name: component.ComponentID,
+			})
+		}
+	}
 	// creating the service
 	service := &v1.Service{
 		ObjectMeta: metav1.ObjectMeta{
@@ -103,55 +114,56 @@ func ExposeSession(cs *kubernetes.Clientset, sessionID string, ingressName strin
 			Selector: map[string]string{
 				"app": sessionID,
 			},
-			Ports: []v1.ServicePort{
-				{
-					Port:       8443,
-					TargetPort: intstr.FromInt(8443),
-				},
-			},
-			Type: v1.ServiceTypeClusterIP,
+			Ports: ports,
+			Type:  v1.ServiceTypeClusterIP,
 		},
 	}
 	_, err := cs.CoreV1().Services("default").Create(context.TODO(), service, metav1.CreateOptions{})
 	if err != nil {
-		return "", errors.New(fmt.Sprintf("failed to create service for session %s", sessionID))
+		return nil, errors.New(fmt.Sprintf("failed to create service for session %s", sessionID))
 	}
 
 	// update ingress with a new entry
 	ingress, err := cs.NetworkingV1().Ingresses("default").Get(context.TODO(), ingressName, metav1.GetOptions{})
 	if err != nil {
-		return "", errors.New(fmt.Sprintf("failed to get ingress %s", ingressName))
+		return nil, errors.New(fmt.Sprintf("failed to get ingress %s", ingressName))
 	}
 	pathType := networkingv1.PathTypePrefix
-
-	newRule := networkingv1.IngressRule{
-		Host: fmt.Sprintf("%s.hamzaboudouche.tech", sessionID),
-		IngressRuleValue: networkingv1.IngressRuleValue{
-			HTTP: &networkingv1.HTTPIngressRuleValue{
-				Paths: []networkingv1.HTTPIngressPath{
-					{
-						Path:     "/", // Replace with the desired path
-						PathType: &pathType,
-						Backend: networkingv1.IngressBackend{
-							Service: &networkingv1.IngressServiceBackend{
-								Name: sessionID,
-								Port: networkingv1.ServiceBackendPort{
-									Number: 8443,
+	rules := make([]networkingv1.IngressRule, 0, len(ports))
+	for i, component := range components {
+		if component.ExposeComponent {
+            url := fmt.Sprintf("%s.%s.hamzaboudouche.tech", sessionID, component.ComponentID)
+            components[i].ComponentMetadata.Url = url
+			rules = append(rules, networkingv1.IngressRule{
+				Host: url,
+				IngressRuleValue: networkingv1.IngressRuleValue{
+					HTTP: &networkingv1.HTTPIngressRuleValue{
+						Paths: []networkingv1.HTTPIngressPath{
+							{
+								Path:     "/",
+								PathType: &pathType,
+								Backend: networkingv1.IngressBackend{
+									Service: &networkingv1.IngressServiceBackend{
+										Name: sessionID,
+										Port: networkingv1.ServiceBackendPort{
+											Number: int32(component.GetPublicPort()),
+										},
+									},
 								},
 							},
 						},
 					},
 				},
-			},
-		},
+			})
+		}
 	}
 
-	ingress.Spec.Rules = append(ingress.Spec.Rules, newRule)
+	ingress.Spec.Rules = append(ingress.Spec.Rules, rules...)
 	_, err = cs.NetworkingV1().Ingresses("default").Update(context.TODO(), ingress, metav1.UpdateOptions{})
 	if err != nil {
-		return "", fmt.Errorf("failed to update the ingress %s with a new rule for the session %s", ingressName, sessionID)
+		return nil, fmt.Errorf("failed to update the ingress %s with a new rule for the session %s", ingressName, sessionID)
 	}
-	return fmt.Sprintf("%s.hamzaboudouche.tech/", sessionID), nil
+	return components, nil
 }
 
 func InitSession(rc *redis.Client, kcs *kubernetes.Clientset, sessionID string) error {
@@ -195,9 +207,23 @@ type ComponentMetadata struct {
 
 type Component struct {
 	ComponentType     ComponentType     `json:"componentType"`
+	ExposeComponent   bool              `json:"exposeComponent"`
 	ComponentID       string            `json:"componentID"`
 	ComponentMetadata ComponentMetadata `json:"componentMetadata"`
 	ComponentState    ComponentState    `json:"componentState"`
+}
+
+func (c Component) GetPublicPort() int {
+	switch c.ComponentType {
+	case Code:
+		return 8443
+	case Redis:
+		return 6379
+	case Mongo:
+		return 27017
+	default:
+		return 8080
+	}
 }
 
 func (c Component) ToContainer(sessionID string) (*v1.Container, *v1.Volume, error) {
@@ -207,7 +233,7 @@ func (c Component) ToContainer(sessionID string) (*v1.Container, *v1.Volume, err
 				Image: "linuxserver/code-server",
 				Ports: []v1.ContainerPort{
 					{
-						ContainerPort: 8443,
+						ContainerPort: int32(c.GetPublicPort()),
 					},
 				},
 				Env: []v1.EnvVar{
@@ -252,7 +278,7 @@ func (c Component) ToContainer(sessionID string) (*v1.Container, *v1.Volume, err
 				Image: "redis:latest",
 				Ports: []v1.ContainerPort{
 					{
-						ContainerPort: 6379,
+						ContainerPort: int32(c.GetPublicPort()),
 					},
 				},
 				VolumeMounts: []v1.VolumeMount{
@@ -275,7 +301,7 @@ func (c Component) ToContainer(sessionID string) (*v1.Container, *v1.Volume, err
 				Image: "mongo:latest",
 				Ports: []v1.ContainerPort{
 					{
-						ContainerPort: 27017,
+						ContainerPort: int32(c.GetPublicPort()),
 					},
 				},
 				VolumeMounts: []v1.VolumeMount{
@@ -400,11 +426,10 @@ func CreateDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string, 
 	}
 
 	// expose the deployment
-	ideUrl, err := ExposeSession(cs, sessionID, "minimal-ingress")
+	components, err = ExposeSession(cs, sessionID, components, "minimal-ingress")
 	if err != nil {
 		return err
 	}
-	components[0].ComponentMetadata.Url = ideUrl
 
 	sessionJSON, _ := json.Marshal(SessionInfo{
 		SessionState: Initialized,
@@ -616,7 +641,7 @@ func DeleteDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string) 
 	}
 	var filteredRules []networkingv1.IngressRule
 	for _, rule := range ingress.Spec.Rules {
-		if !strings.HasPrefix(rule.Host, sessionID) {
+		if !strings.HasPrefix(rule.Host, fmt.Sprintf("%s.", sessionID)) {
 			filteredRules = append(filteredRules, rule)
 		}
 	}
