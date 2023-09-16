@@ -557,7 +557,7 @@ func RefreshDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string)
 	return nil, nil
 }
 
-func GetSessionLogs(cs *kubernetes.Clientset, sessionID string, componentID string) (io.ReadCloser, error) {
+func GetSessionLogs(ctx context.Context, cs *kubernetes.Clientset, sessionID string, componentID string) (io.ReadCloser, error) {
 	pods, err := cs.CoreV1().Pods("default").List(
 		context.TODO(),
 		metav1.ListOptions{
@@ -579,7 +579,7 @@ func GetSessionLogs(cs *kubernetes.Clientset, sessionID string, componentID stri
 			podLogRequest := cs.CoreV1().
 				Pods("default").
 				GetLogs(pods.Items[0].Name, &podLogOptions)
-			stream, err := podLogRequest.Stream(context.TODO())
+			stream, err := podLogRequest.Stream(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get logs for container %s in session %s", container.Name, sessionID)
 			}
