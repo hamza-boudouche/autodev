@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -463,21 +464,21 @@ func ContainerStatus(cs *kubernetes.Clientset, sessionID string) (map[string]Com
 		return nil, nil
 	}
 
-    res :=make(map[string]ComponentState, len(pods.Items[0].Status.ContainerStatuses))
+	res := make(map[string]ComponentState, len(pods.Items[0].Status.ContainerStatuses))
 
 	for _, containerStatus := range pods.Items[0].Status.ContainerStatuses {
 		if containerStatus.State.Running != nil {
 			// container is running
-		    res[containerStatus.Name] = Ready
+			res[containerStatus.Name] = Ready
 		} else if containerStatus.State.Terminated != nil {
-            // container is waiting
-            res[containerStatus.Name] = Terminated
-        } else {
-            // container is not ready yet
-            res[containerStatus.Name] = Initializing
-        }
+			// container is waiting
+			res[containerStatus.Name] = Terminated
+		} else {
+			// container is not ready yet
+			res[containerStatus.Name] = Initializing
+		}
 	}
-    return res, nil
+	return res, nil
 }
 
 func RefreshDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string) (*SessionInfo, error) {
@@ -554,6 +555,39 @@ func RefreshDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string)
 		return &session, nil
 	}
 	return nil, nil
+}
+
+func GetSessionLogs(cs *kubernetes.Clientset, sessionID string, componentID string) (io.ReadCloser, error) {
+	pods, err := cs.CoreV1().Pods("default").List(
+		context.TODO(),
+		metav1.ListOptions{
+			LabelSelector: fmt.Sprintf("app=%s", sessionID),
+		},
+	)
+
+	if err != nil || len(pods.Items) == 0 {
+		// either pods have not been created yet or deployment doesn't exist
+		return nil, fmt.Errorf("failed to fetch pods for session %s", sessionID)
+	}
+
+	for _, container := range pods.Items[0].Spec.Containers {
+		if container.Name == componentID {
+			podLogOptions := v1.PodLogOptions{
+				Container: container.Name,
+				Follow:    true,
+			}
+			podLogRequest := cs.CoreV1().
+				Pods("default").
+				GetLogs(pods.Items[0].Name, &podLogOptions)
+			stream, err := podLogRequest.Stream(context.TODO())
+			if err != nil {
+				return nil, fmt.Errorf("failed to get logs for container %s in session %s", container.Name, sessionID)
+			}
+			return stream, err
+		}
+	}
+
+	return nil, fmt.Errorf("failed to find component %s", componentID)
 }
 
 func ToggleDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string) error {
