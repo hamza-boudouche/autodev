@@ -184,21 +184,21 @@ func InitSession(rc *redis.Client, kcs *kubernetes.Clientset, sessionID string) 
 	return nil
 }
 
-type ComponentType int64
+type ComponentType string
 
 const (
-	Undefined ComponentType = iota
-	Code
-	Redis
-	Mongo
+	Undefined ComponentType = "undefined"
+	Code      ComponentType = "code"
+	Redis     ComponentType = "redis"
+	Mongo     ComponentType = "mongo"
 )
 
-type ComponentState int64
+type ComponentState string
 
 const (
-	Initializing ComponentState = iota
-	Ready
-	Terminated
+	Initializing ComponentState = "initializing"
+	Ready        ComponentState = "ready"
+	Terminated   ComponentState = "terminated"
 )
 
 type ComponentMetadata struct {
@@ -211,7 +211,6 @@ type Component struct {
 	ExposeComponent   bool              `json:"exposeComponent"`
 	ComponentID       string            `json:"componentID"`
 	ComponentMetadata ComponentMetadata `json:"componentMetadata"`
-	ComponentState    ComponentState    `json:"componentState"`
 }
 
 func (c Component) GetPublicPort() int {
@@ -320,7 +319,7 @@ func (c Component) ToContainer(sessionID string) (*v1.Container, *v1.Volume, err
 				},
 			}, nil
 	}
-	return nil, nil, fmt.Errorf("unsupported component %d", c.ComponentType)
+	return nil, nil, fmt.Errorf("unsupported component %s", c.ComponentType)
 }
 
 func ParseComponents(components []Component, sessionID string) ([]*v1.Container, []*v1.Volume, error) {
@@ -339,12 +338,12 @@ func ParseComponents(components []Component, sessionID string) ([]*v1.Container,
 	return containers, volumes, nil
 }
 
-type SessionState int64
+type SessionState string
 
 const (
-	Initialized SessionState = iota
-	Running
-	Stopped
+	Initialized SessionState = "initialized"
+	Running SessionState = "running"
+	Stopped SessionState = "stopped"
 )
 
 type SessionInfo struct {
