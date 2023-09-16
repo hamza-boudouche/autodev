@@ -1,4 +1,5 @@
-package helpers
+package sessions
+
 
 import (
 	"context"
@@ -6,95 +7,50 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/redis/go-redis/v9"
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/client-go/util/homedir"
+    cmp "github.com/hamza-boudouche/autodev/pkg/components"
+    "github.com/hamza-boudouche/autodev/pkg/helpers/k8s"
 )
 
-func GetK8sClient() (*kubernetes.Clientset, error) {
-	_, inKubernetes := os.LookupEnv("KUBERNETES_SERVICE_HOST")
-	if inKubernetes {
-		fmt.Println("Running inside a Kubernetes cluster.")
-		config, err := rest.InClusterConfig()
-		if err != nil {
-			return nil, err
-		}
-		// creates the clientset
-		clientset, err := kubernetes.NewForConfig(config)
-		if err != nil {
-			return nil, err
-		}
-		return clientset, nil
-	} else {
-		fmt.Println("Not running inside a Kubernetes cluster.")
-		config, err := clientcmd.BuildConfigFromFlags("", filepath.Join(homedir.HomeDir(), ".kube", "config"))
-		if err != nil {
-			return nil, err
-		}
-		clientset, err := kubernetes.NewForConfig(config)
-		if err != nil {
-			return nil, err
-		}
-		return clientset, nil
-	}
+type SessionState string
+
+const (
+	Initialized SessionState = "initialized"
+	Running     SessionState = "running"
+	Stopped     SessionState = "stopped"
+)
+
+type SessionInfo struct {
+	SessionState SessionState `json:"sessionState"`
+	Components   []cmp.Component  `json:"components"`
 }
 
-func CreatePV(cs *kubernetes.Clientset, name string, capacity string) error {
-	pvPath := "/root"
-	pv := &v1.PersistentVolume{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: name,
-		},
-		Spec: v1.PersistentVolumeSpec{
-			Capacity: v1.ResourceList{
-				v1.ResourceStorage: resource.MustParse(capacity),
-			},
-			PersistentVolumeReclaimPolicy: v1.PersistentVolumeReclaimRetain,
-			AccessModes:                   []v1.PersistentVolumeAccessMode{v1.ReadWriteOnce},
-			PersistentVolumeSource: v1.PersistentVolumeSource{
-				HostPath: &v1.HostPathVolumeSource{
-					Path: pvPath,
-					Type: new(v1.HostPathType),
-				},
-			},
-		},
+func InitSession(rc *redis.Client, kcs *kubernetes.Clientset, sessionID string) error {
+	_, err := rc.Get(context.TODO(), sessionID).Result()
+	if err == redis.Nil {
+		// session has not been initialized before, proceed to initialize
+		rc.Set(context.TODO(), sessionID, 1, 0)
+		// if err := CreatePV(kcs, sessionID, "10Mi"); err != nil {
+		// 	return err
+		// }
+		return k8s.CreatePVC(kcs, sessionID, "10Mi")
+	} else if err != nil {
+		// some error other than key not found occured, abort
+		return err
 	}
-	_, err := cs.CoreV1().PersistentVolumes().Create(context.TODO(), pv, metav1.CreateOptions{})
-	return err
+	// session was found, no need to initialize again
+	return nil
 }
 
-func CreatePVC(cs *kubernetes.Clientset, name string, capacity string) error {
-	pvc := &v1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: "default",
-		},
-		Spec: v1.PersistentVolumeClaimSpec{
-			AccessModes: []v1.PersistentVolumeAccessMode{v1.ReadWriteOnce},
-			Resources: v1.ResourceRequirements{
-				Requests: v1.ResourceList{
-					v1.ResourceStorage: resource.MustParse(capacity),
-				},
-			},
-		},
-	}
-	_, err := cs.CoreV1().PersistentVolumeClaims("default").Create(context.TODO(), pvc, metav1.CreateOptions{})
-	return err
-}
-
-func ExposeSession(cs *kubernetes.Clientset, sessionID string, components []Component, ingressName string) ([]Component, error) {
+func ExposeSession(cs *kubernetes.Clientset, sessionID string, components []cmp.Component, ingressName string) ([]cmp.Component, error) {
 	// create all the port that need to be exposed
 	ports := make([]v1.ServicePort, 0, len(components))
 	for _, component := range components {
@@ -167,191 +123,7 @@ func ExposeSession(cs *kubernetes.Clientset, sessionID string, components []Comp
 	return components, nil
 }
 
-func InitSession(rc *redis.Client, kcs *kubernetes.Clientset, sessionID string) error {
-	_, err := rc.Get(context.TODO(), sessionID).Result()
-	if err == redis.Nil {
-		// session has not been initialized before, proceed to initialize
-		rc.Set(context.TODO(), sessionID, 1, 0)
-		// if err := CreatePV(kcs, sessionID, "10Mi"); err != nil {
-		// 	return err
-		// }
-		return CreatePVC(kcs, sessionID, "10Mi")
-	} else if err != nil {
-		// some error other than key not found occured, abort
-		return err
-	}
-	// session was found, no need to initialize again
-	return nil
-}
-
-type ComponentType string
-
-const (
-	Undefined ComponentType = "undefined"
-	Code      ComponentType = "code"
-	Redis     ComponentType = "redis"
-	Mongo     ComponentType = "mongo"
-)
-
-type ComponentState string
-
-const (
-	Initializing ComponentState = "initializing"
-	Ready        ComponentState = "ready"
-	Terminated   ComponentState = "terminated"
-)
-
-type ComponentMetadata struct {
-	Password string
-	Url      string
-}
-
-type Component struct {
-	ComponentType     ComponentType     `json:"componentType"`
-	ExposeComponent   bool              `json:"exposeComponent"`
-	ComponentID       string            `json:"componentID"`
-	ComponentMetadata ComponentMetadata `json:"componentMetadata"`
-}
-
-func (c Component) GetPublicPort() int {
-	switch c.ComponentType {
-	case Code:
-		return 8443
-	case Redis:
-		return 6379
-	case Mongo:
-		return 27017
-	default:
-		return 8080
-	}
-}
-
-func (c Component) ToContainer(sessionID string) (*v1.Container, *v1.Volume, error) {
-	if c.ComponentType == Code {
-		return &v1.Container{
-				Name:  c.ComponentID,
-				Image: "linuxserver/code-server",
-				Ports: []v1.ContainerPort{
-					{
-						ContainerPort: int32(c.GetPublicPort()),
-					},
-				},
-				Env: []v1.EnvVar{
-					{
-						Name:  "PUID",
-						Value: "1000",
-					},
-					{
-						Name:  "PGID",
-						Value: "1000",
-					},
-					{
-						Name:  "TZ",
-						Value: "Etc/UTC",
-					},
-					{
-						Name:  "PASSWORD",
-						Value: c.ComponentMetadata.Password,
-					},
-					{
-						Name:  "SUDO_PASSWORD",
-						Value: "password",
-					},
-				},
-				VolumeMounts: []v1.VolumeMount{
-					{
-						Name:      sessionID,
-						MountPath: "/config/workspace",
-					},
-				},
-			}, &v1.Volume{
-				Name: sessionID,
-				VolumeSource: v1.VolumeSource{
-					PersistentVolumeClaim: &v1.PersistentVolumeClaimVolumeSource{
-						ClaimName: sessionID,
-					},
-				},
-			}, nil
-	} else if c.ComponentType == Redis {
-		return &v1.Container{
-				Name:  c.ComponentID,
-				Image: "redis:latest",
-				Ports: []v1.ContainerPort{
-					{
-						ContainerPort: int32(c.GetPublicPort()),
-					},
-				},
-				VolumeMounts: []v1.VolumeMount{
-					{
-						Name:      "redis-data",
-						MountPath: "/data",
-					},
-				},
-			}, &v1.Volume{
-				Name: "redis-data",
-				VolumeSource: v1.VolumeSource{
-					PersistentVolumeClaim: &v1.PersistentVolumeClaimVolumeSource{
-						ClaimName: "redis-data",
-					},
-				},
-			}, nil
-	} else if c.ComponentType == Mongo {
-		return &v1.Container{
-				Name:  c.ComponentID,
-				Image: "mongo:latest",
-				Ports: []v1.ContainerPort{
-					{
-						ContainerPort: int32(c.GetPublicPort()),
-					},
-				},
-				VolumeMounts: []v1.VolumeMount{
-					{
-						Name:      "mongodb-data",
-						MountPath: "/data/db",
-					},
-				},
-			}, &v1.Volume{
-				Name: "mongodb-data",
-				VolumeSource: v1.VolumeSource{
-					PersistentVolumeClaim: &v1.PersistentVolumeClaimVolumeSource{
-						ClaimName: "mongodb-data",
-					},
-				},
-			}, nil
-	}
-	return nil, nil, fmt.Errorf("unsupported component %s", c.ComponentType)
-}
-
-func ParseComponents(components []Component, sessionID string) ([]*v1.Container, []*v1.Volume, error) {
-	containers := make([]*v1.Container, len(components))
-	var volumes []*v1.Volume
-	for i, component := range components {
-		container, volume, err := component.ToContainer(sessionID)
-		if err != nil {
-			return nil, nil, err
-		}
-		containers[i] = container
-		if volume != nil {
-			volumes = append(volumes, volume)
-		}
-	}
-	return containers, volumes, nil
-}
-
-type SessionState string
-
-const (
-	Initialized SessionState = "initialized"
-	Running SessionState = "running"
-	Stopped SessionState = "stopped"
-)
-
-type SessionInfo struct {
-	SessionState SessionState `json:"sessionState"`
-	Components   []Component  `json:"components"`
-}
-
-func CreateDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string, components []Component) error {
+func CreateDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string, components []cmp.Component) error {
 	sessionState, err := rc.Get(context.TODO(), sessionID).Result()
 	if err != nil {
 		return err
@@ -363,7 +135,7 @@ func CreateDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string, 
 	var replicas *int32
 	replicas = new(int32)
 	*replicas = 1
-	containers, volumes, err := ParseComponents(components, sessionID)
+	containers, volumes, err := cmp.ParseComponents(components, sessionID)
 	if err != nil {
 		return err
 	}
@@ -377,7 +149,7 @@ func CreateDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string, 
 		// if err != nil {
 		// 	return err
 		// }
-		err = CreatePVC(cs, volume.Name, "20Mi")
+		err = k8s.CreatePVC(cs, volume.Name, "20Mi")
 		if err != nil {
 			return err
 		}
@@ -443,7 +215,7 @@ func CreateDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string, 
 	return err
 }
 
-func ContainerStatus(cs *kubernetes.Clientset, sessionID string) (map[string]ComponentState, error) {
+func ContainerStatus(cs *kubernetes.Clientset, sessionID string) (map[string]cmp.ComponentState, error) {
 	_, err := cs.AppsV1().Deployments("default").Get(context.TODO(), sessionID, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get deployment for session: %s", sessionID)
@@ -463,18 +235,18 @@ func ContainerStatus(cs *kubernetes.Clientset, sessionID string) (map[string]Com
 		return nil, nil
 	}
 
-	res := make(map[string]ComponentState, len(pods.Items[0].Status.ContainerStatuses))
+	res := make(map[string]cmp.ComponentState, len(pods.Items[0].Status.ContainerStatuses))
 
 	for _, containerStatus := range pods.Items[0].Status.ContainerStatuses {
 		if containerStatus.State.Running != nil {
 			// container is running
-			res[containerStatus.Name] = Ready
+			res[containerStatus.Name] = cmp.Ready
 		} else if containerStatus.State.Terminated != nil {
 			// container is waiting
-			res[containerStatus.Name] = Terminated
+			res[containerStatus.Name] = cmp.Terminated
 		} else {
 			// container is not ready yet
-			res[containerStatus.Name] = Initializing
+			res[containerStatus.Name] = cmp.Initializing
 		}
 	}
 	return res, nil
@@ -522,7 +294,7 @@ func RefreshDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string)
 			// deployment is still ready
 			return &session, err
 		} else {
-			_, volumes, _ := ParseComponents(session.Components, sessionID)
+			_, volumes, _ := cmp.ParseComponents(session.Components, sessionID)
 			for _, volume := range volumes {
 				_, err := cs.CoreV1().PersistentVolumeClaims("default").Get(context.TODO(), volume.Name, metav1.GetOptions{})
 				if err != nil {
@@ -538,7 +310,7 @@ func RefreshDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string)
 			return &session, nil
 		}
 	} else if session.SessionState == Stopped {
-		_, volumes, _ := ParseComponents(session.Components, sessionID)
+		_, volumes, _ := cmp.ParseComponents(session.Components, sessionID)
 		for _, volume := range volumes {
 			_, err := cs.CoreV1().PersistentVolumeClaims("default").Get(context.TODO(), volume.Name, metav1.GetOptions{})
 			if err != nil {
@@ -619,7 +391,7 @@ func ToggleDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string) 
 		var replicas *int32
 		replicas = new(int32)
 		*replicas = 1
-		containers, volumes, err := ParseComponents(session.Components, sessionID)
+		containers, volumes, err := cmp.ParseComponents(session.Components, sessionID)
 		if err != nil {
 			return err
 		}
@@ -689,7 +461,7 @@ func DeleteDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string) 
 	}
 	var session SessionInfo
 	err = json.Unmarshal([]byte(sessionJSON), &session)
-	_, volumes, err := ParseComponents(session.Components, sessionID)
+	_, volumes, err := cmp.ParseComponents(session.Components, sessionID)
 	if err != nil {
 		return err
 	}

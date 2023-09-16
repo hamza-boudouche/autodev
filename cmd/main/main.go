@@ -8,26 +8,29 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/hamza-boudouche/autodev/helpers"
+	"github.com/hamza-boudouche/autodev/pkg/helpers/cache"
+	"github.com/hamza-boudouche/autodev/pkg/helpers/k8s"
+    cmp "github.com/hamza-boudouche/autodev/pkg/components"
+    ss "github.com/hamza-boudouche/autodev/pkg/sessions"
 )
 
 type CreateEnv struct {
-	Components []helpers.Component `json:"components"`
+	Components []cmp.Component `json:"components"`
 }
 
 func main() {
-	kcs, err := helpers.GetK8sClient()
+	kcs, err := k8s.GetK8sClient()
 	if err != nil {
 		panic(err)
 	}
 
-	rc := helpers.CreateRedisClient()
+	rc := cache.CreateRedisClient()
 
 	r := gin.Default()
 
 	r.POST("/init/:sessionID", func(c *gin.Context) {
 		sessionID := strings.ReplaceAll(c.Param("sessionID"), "/", "")
-		err := helpers.InitSession(rc, kcs, sessionID)
+		err := ss.InitSession(rc, kcs, sessionID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": fmt.Sprintf("failed to initialize session %s", sessionID),
@@ -48,7 +51,7 @@ func main() {
 			})
 			return
 		}
-		err := helpers.CreateDeploy(kcs, rc, sessionID, body.Components)
+		err := ss.CreateDeploy(kcs, rc, sessionID, body.Components)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": fmt.Sprintf("failed to create components for session %s", sessionID),
@@ -62,7 +65,7 @@ func main() {
 
 	r.GET("/statuses/:sessionID", func(c *gin.Context) {
 		sessionID := strings.ReplaceAll(c.Param("sessionID"), "/", "")
-		containerStatuses, err := helpers.ContainerStatus(kcs, sessionID)
+		containerStatuses, err := ss.ContainerStatus(kcs, sessionID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": err.Error(),
@@ -86,7 +89,7 @@ func main() {
 		sessionID := strings.ReplaceAll(c.Param("sessionID"), "/", "")
 		componentID := strings.ReplaceAll(c.Param("componentID"), "/", "")
 
-		logStream, err := helpers.GetSessionLogs(c.Request.Context(), kcs, sessionID, componentID)
+		logStream, err := ss.GetSessionLogs(c.Request.Context(), kcs, sessionID, componentID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": err.Error(),
@@ -112,7 +115,7 @@ func main() {
 
 	r.POST("/refresh/:sessionID", func(c *gin.Context) {
 		sessionID := strings.ReplaceAll(c.Param("sessionID"), "/", "")
-		sessionInfo, err := helpers.RefreshDeploy(kcs, rc, sessionID)
+		sessionInfo, err := ss.RefreshDeploy(kcs, rc, sessionID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": fmt.Sprintf("failed to refresh session %s", sessionID),
@@ -127,7 +130,7 @@ func main() {
 
 	r.PATCH("/toggle/:sessionID", func(c *gin.Context) {
 		sessionID := strings.ReplaceAll(c.Param("sessionID"), "/", "")
-		err := helpers.ToggleDeploy(kcs, rc, sessionID)
+		err := ss.ToggleDeploy(kcs, rc, sessionID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": fmt.Sprintf("failed to toggle session %s", sessionID),
@@ -141,7 +144,7 @@ func main() {
 
 	r.DELETE("/:sessionID", func(c *gin.Context) {
 		sessionID := strings.ReplaceAll(c.Param("sessionID"), "/", "")
-		err := helpers.DeleteDeploy(kcs, rc, sessionID)
+		err := ss.DeleteDeploy(kcs, rc, sessionID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": fmt.Sprintf("failed to delete session %s", sessionID),
