@@ -37,16 +37,13 @@ func InitSession(ctx context.Context, rc *redis.Client, kcs *kubernetes.Clientse
 	if err == redis.Nil {
 		// session has not been initialized before, proceed to initialize
 		rc.Set(ctx, sessionID, 1, 0)
-		// if err := CreatePV(kcs, sessionID, "10Mi"); err != nil {
-		// 	return err
-		// }
 		return k8s.CreatePVC(ctx, kcs, sessionID, "10Mi")
 	} else if err != nil {
 		// some error other than key not found occured, abort
 		return err
 	}
 	// session was found, no need to initialize again
-	return nil
+	return fmt.Errorf("session %s already exists", sessionID)
 }
 
 func ExposeSession(ctx context.Context, cs *kubernetes.Clientset, sessionID string, components []cmp.Component, ingressName string) ([]cmp.Component, error) {
@@ -460,18 +457,30 @@ func DeleteDeploy(ctx context.Context, cs *kubernetes.Clientset, rc *redis.Clien
 	}
 	var session SessionInfo
 	err = json.Unmarshal([]byte(sessionJSON), &session)
+	if err != nil {
+		// if the json unmarshalling fails then it's because the session was just initialized
+		// we still need to delete the code editor's pvc
+		cs.CoreV1().PersistentVolumeClaims("default").Delete(
+			ctx,
+			sessionID,
+			metav1.DeleteOptions{},
+		)
+
+		_, err = rc.Del(
+			ctx,
+			sessionID).Result()
+		return err
+	}
 	_, volumes, err := cmp.ParseComponents(session.Components, sessionID)
 	if err != nil {
 		return err
 	}
+
 	for _, volume := range volumes {
-		err = cs.CoreV1().PersistentVolumeClaims("default").Delete(
+		cs.CoreV1().PersistentVolumeClaims("default").Delete(
 			ctx,
 			volume.VolumeSource.PersistentVolumeClaim.ClaimName,
 			metav1.DeleteOptions{})
-		if err != nil {
-			return err
-		}
 	}
 
 	_ = cs.CoreV1().Services("default").Delete(ctx, sessionID, metav1.DeleteOptions{})
