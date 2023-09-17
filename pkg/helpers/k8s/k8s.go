@@ -43,7 +43,7 @@ func GetK8sClient() (*kubernetes.Clientset, error) {
 	}
 }
 
-func CreatePV(cs *kubernetes.Clientset, name string, capacity string) error {
+func CreatePV(ctx context.Context, cs *kubernetes.Clientset, name string, capacity string) error {
 	pvPath := "/root"
 	pv := &v1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{
@@ -63,11 +63,11 @@ func CreatePV(cs *kubernetes.Clientset, name string, capacity string) error {
 			},
 		},
 	}
-	_, err := cs.CoreV1().PersistentVolumes().Create(context.TODO(), pv, metav1.CreateOptions{})
+	_, err := cs.CoreV1().PersistentVolumes().Create(ctx, pv, metav1.CreateOptions{})
 	return err
 }
 
-func CreatePVC(cs *kubernetes.Clientset, name string, capacity string) error {
+func CreatePVC(ctx context.Context, cs *kubernetes.Clientset, name string, capacity string) error {
 	pvc := &v1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -82,7 +82,7 @@ func CreatePVC(cs *kubernetes.Clientset, name string, capacity string) error {
 			},
 		},
 	}
-	_, err := cs.CoreV1().PersistentVolumeClaims("default").Create(context.TODO(), pvc, metav1.CreateOptions{})
+	_, err := cs.CoreV1().PersistentVolumeClaims("default").Create(ctx, pvc, metav1.CreateOptions{})
 	return err
 }
 

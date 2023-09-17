@@ -1,6 +1,5 @@
 package sessions
 
-
 import (
 	"context"
 	"encoding/json"
@@ -9,6 +8,8 @@ import (
 	"io"
 	"strings"
 
+	cmp "github.com/hamza-boudouche/autodev/pkg/components"
+	"github.com/hamza-boudouche/autodev/pkg/helpers/k8s"
 	"github.com/redis/go-redis/v9"
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
@@ -16,8 +17,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
-    cmp "github.com/hamza-boudouche/autodev/pkg/components"
-    "github.com/hamza-boudouche/autodev/pkg/helpers/k8s"
 )
 
 type SessionState string
@@ -29,19 +28,19 @@ const (
 )
 
 type SessionInfo struct {
-	SessionState SessionState `json:"sessionState"`
-	Components   []cmp.Component  `json:"components"`
+	SessionState SessionState    `json:"sessionState"`
+	Components   []cmp.Component `json:"components"`
 }
 
-func InitSession(rc *redis.Client, kcs *kubernetes.Clientset, sessionID string) error {
-	_, err := rc.Get(context.TODO(), sessionID).Result()
+func InitSession(ctx context.Context, rc *redis.Client, kcs *kubernetes.Clientset, sessionID string) error {
+	_, err := rc.Get(ctx, sessionID).Result()
 	if err == redis.Nil {
 		// session has not been initialized before, proceed to initialize
-		rc.Set(context.TODO(), sessionID, 1, 0)
+		rc.Set(ctx, sessionID, 1, 0)
 		// if err := CreatePV(kcs, sessionID, "10Mi"); err != nil {
 		// 	return err
 		// }
-		return k8s.CreatePVC(kcs, sessionID, "10Mi")
+		return k8s.CreatePVC(ctx, kcs, sessionID, "10Mi")
 	} else if err != nil {
 		// some error other than key not found occured, abort
 		return err
@@ -50,7 +49,7 @@ func InitSession(rc *redis.Client, kcs *kubernetes.Clientset, sessionID string) 
 	return nil
 }
 
-func ExposeSession(cs *kubernetes.Clientset, sessionID string, components []cmp.Component, ingressName string) ([]cmp.Component, error) {
+func ExposeSession(ctx context.Context, cs *kubernetes.Clientset, sessionID string, components []cmp.Component, ingressName string) ([]cmp.Component, error) {
 	// create all the port that need to be exposed
 	ports := make([]v1.ServicePort, 0, len(components))
 	for _, component := range components {
@@ -75,13 +74,13 @@ func ExposeSession(cs *kubernetes.Clientset, sessionID string, components []cmp.
 			Type:  v1.ServiceTypeClusterIP,
 		},
 	}
-	_, err := cs.CoreV1().Services("default").Create(context.TODO(), service, metav1.CreateOptions{})
+	_, err := cs.CoreV1().Services("default").Create(ctx, service, metav1.CreateOptions{})
 	if err != nil {
 		return nil, errors.New(fmt.Sprintf("failed to create service for session %s", sessionID))
 	}
 
 	// update ingress with a new entry
-	ingress, err := cs.NetworkingV1().Ingresses("default").Get(context.TODO(), ingressName, metav1.GetOptions{})
+	ingress, err := cs.NetworkingV1().Ingresses("default").Get(ctx, ingressName, metav1.GetOptions{})
 	if err != nil {
 		return nil, errors.New(fmt.Sprintf("failed to get ingress %s", ingressName))
 	}
@@ -116,15 +115,15 @@ func ExposeSession(cs *kubernetes.Clientset, sessionID string, components []cmp.
 	}
 
 	ingress.Spec.Rules = append(ingress.Spec.Rules, rules...)
-	_, err = cs.NetworkingV1().Ingresses("default").Update(context.TODO(), ingress, metav1.UpdateOptions{})
+	_, err = cs.NetworkingV1().Ingresses("default").Update(ctx, ingress, metav1.UpdateOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to update the ingress %s with a new rule for the session %s", ingressName, sessionID)
 	}
 	return components, nil
 }
 
-func CreateDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string, components []cmp.Component) error {
-	sessionState, err := rc.Get(context.TODO(), sessionID).Result()
+func CreateDeploy(ctx context.Context, cs *kubernetes.Clientset, rc *redis.Client, sessionID string, components []cmp.Component) error {
+	sessionState, err := rc.Get(ctx, sessionID).Result()
 	if err != nil {
 		return err
 	}
@@ -149,7 +148,7 @@ func CreateDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string, 
 		// if err != nil {
 		// 	return err
 		// }
-		err = k8s.CreatePVC(cs, volume.Name, "20Mi")
+		err = k8s.CreatePVC(ctx, cs, volume.Name, "20Mi")
 		if err != nil {
 			return err
 		}
@@ -192,13 +191,13 @@ func CreateDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string, 
 	}
 
 	// Create the Deployment
-	_, err = cs.AppsV1().Deployments("default").Create(context.TODO(), deployment, metav1.CreateOptions{})
+	_, err = cs.AppsV1().Deployments("default").Create(ctx, deployment, metav1.CreateOptions{})
 	if err != nil {
 		return err
 	}
 
 	// expose the deployment
-	components, err = ExposeSession(cs, sessionID, components, "minimal-ingress")
+	components, err = ExposeSession(ctx, cs, sessionID, components, "minimal-ingress")
 	if err != nil {
 		return err
 	}
@@ -208,20 +207,20 @@ func CreateDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string, 
 		Components:   components,
 	})
 	_, err = rc.Set(
-		context.TODO(),
+		ctx,
 		sessionID,
 		string(sessionJSON),
 		0).Result()
 	return err
 }
 
-func ContainerStatus(cs *kubernetes.Clientset, sessionID string) (map[string]cmp.ComponentState, error) {
-	_, err := cs.AppsV1().Deployments("default").Get(context.TODO(), sessionID, metav1.GetOptions{})
+func ContainerStatus(ctx context.Context, cs *kubernetes.Clientset, sessionID string) (map[string]cmp.ComponentState, error) {
+	_, err := cs.AppsV1().Deployments("default").Get(ctx, sessionID, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get deployment for session: %s", sessionID)
 	}
 	pods, err := cs.CoreV1().Pods("default").List(
-		context.TODO(),
+		ctx,
 		metav1.ListOptions{
 			LabelSelector: fmt.Sprintf("app=%s", sessionID),
 		},
@@ -252,9 +251,9 @@ func ContainerStatus(cs *kubernetes.Clientset, sessionID string) (map[string]cmp
 	return res, nil
 }
 
-func RefreshDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string) (*SessionInfo, error) {
+func RefreshDeploy(ctx context.Context, cs *kubernetes.Clientset, rc *redis.Client, sessionID string) (*SessionInfo, error) {
 	// get stored SessionInfo
-	sessionJSON, err := rc.Get(context.TODO(), sessionID).Result()
+	sessionJSON, err := rc.Get(ctx, sessionID).Result()
 	if err != nil {
 		return nil, err
 	}
@@ -264,7 +263,7 @@ func RefreshDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string)
 		return nil, err
 	}
 	if session.SessionState == Initialized {
-		deployment, err := cs.AppsV1().Deployments("default").Get(context.TODO(), sessionID, metav1.GetOptions{})
+		deployment, err := cs.AppsV1().Deployments("default").Get(ctx, sessionID, metav1.GetOptions{})
 		if err != nil {
 			// deployment not found
 			// TODO: check the type of this error to see if it concerns anything another than the deployment not being found
@@ -275,7 +274,7 @@ func RefreshDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string)
 			session.SessionState = Running
 			sessionJSON, _ := json.Marshal(session)
 			_, err = rc.Set(
-				context.TODO(),
+				ctx,
 				sessionID,
 				string(sessionJSON),
 				0).Result()
@@ -284,7 +283,7 @@ func RefreshDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string)
 			return &session, nil
 		}
 	} else if session.SessionState == Running {
-		deployment, err := cs.AppsV1().Deployments("default").Get(context.TODO(), sessionID, metav1.GetOptions{})
+		deployment, err := cs.AppsV1().Deployments("default").Get(ctx, sessionID, metav1.GetOptions{})
 		if err != nil {
 			// deployment not found
 			// TODO: check the type of this error to see if it concerns anything another than the deployment not being found
@@ -296,13 +295,13 @@ func RefreshDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string)
 		} else {
 			_, volumes, _ := cmp.ParseComponents(session.Components, sessionID)
 			for _, volume := range volumes {
-				_, err := cs.CoreV1().PersistentVolumeClaims("default").Get(context.TODO(), volume.Name, metav1.GetOptions{})
+				_, err := cs.CoreV1().PersistentVolumeClaims("default").Get(ctx, volume.Name, metav1.GetOptions{})
 				if err != nil {
 					// the pvc was not found
 					// the session was deleted
 					// delete from cache
 					_, err = rc.Del(
-						context.TODO(),
+						ctx,
 						sessionID).Result()
 					return nil, err
 				}
@@ -312,13 +311,13 @@ func RefreshDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string)
 	} else if session.SessionState == Stopped {
 		_, volumes, _ := cmp.ParseComponents(session.Components, sessionID)
 		for _, volume := range volumes {
-			_, err := cs.CoreV1().PersistentVolumeClaims("default").Get(context.TODO(), volume.Name, metav1.GetOptions{})
+			_, err := cs.CoreV1().PersistentVolumeClaims("default").Get(ctx, volume.Name, metav1.GetOptions{})
 			if err != nil {
 				// the pvc was not found
 				// the session was deleted
 				// delete from cache
 				_, err = rc.Del(
-					context.TODO(),
+					ctx,
 					sessionID).Result()
 				return nil, err
 			}
@@ -330,7 +329,7 @@ func RefreshDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string)
 
 func GetSessionLogs(ctx context.Context, cs *kubernetes.Clientset, sessionID string, componentID string) (io.ReadCloser, error) {
 	pods, err := cs.CoreV1().Pods("default").List(
-		context.TODO(),
+		ctx,
 		metav1.ListOptions{
 			LabelSelector: fmt.Sprintf("app=%s", sessionID),
 		},
@@ -361,8 +360,8 @@ func GetSessionLogs(ctx context.Context, cs *kubernetes.Clientset, sessionID str
 	return nil, fmt.Errorf("failed to find component %s", componentID)
 }
 
-func ToggleDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string) error {
-	sessionJSON, err := rc.Get(context.TODO(), sessionID).Result()
+func ToggleDeploy(ctx context.Context, cs *kubernetes.Clientset, rc *redis.Client, sessionID string) error {
+	sessionJSON, err := rc.Get(ctx, sessionID).Result()
 	if err != nil {
 		return err
 	}
@@ -374,14 +373,14 @@ func ToggleDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string) 
 
 	if session.SessionState == Running {
 		// toggle off
-		err = cs.AppsV1().Deployments("default").Delete(context.TODO(), sessionID, metav1.DeleteOptions{})
+		err = cs.AppsV1().Deployments("default").Delete(ctx, sessionID, metav1.DeleteOptions{})
 		if err != nil {
 			return err
 		}
 		session.SessionState = Stopped
 		sessionJSON, _ := json.Marshal(session)
 		_, err = rc.Set(
-			context.TODO(),
+			ctx,
 			sessionID,
 			string(sessionJSON),
 			0).Result()
@@ -433,14 +432,14 @@ func ToggleDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string) 
 		}
 
 		// Create the Deployment
-		_, err = cs.AppsV1().Deployments("default").Create(context.TODO(), deployment, metav1.CreateOptions{})
+		_, err = cs.AppsV1().Deployments("default").Create(ctx, deployment, metav1.CreateOptions{})
 		if err != nil {
 			return err
 		}
 		session.SessionState = Running
 		sessionJSON, _ := json.Marshal(session)
 		_, err = rc.Set(
-			context.TODO(),
+			ctx,
 			sessionID,
 			string(sessionJSON),
 			0).Result()
@@ -453,9 +452,9 @@ func ToggleDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string) 
 	}
 }
 
-func DeleteDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string) error {
-	cs.AppsV1().Deployments("default").Delete(context.TODO(), sessionID, metav1.DeleteOptions{})
-	sessionJSON, err := rc.Get(context.TODO(), sessionID).Result()
+func DeleteDeploy(ctx context.Context, cs *kubernetes.Clientset, rc *redis.Client, sessionID string) error {
+	cs.AppsV1().Deployments("default").Delete(ctx, sessionID, metav1.DeleteOptions{})
+	sessionJSON, err := rc.Get(ctx, sessionID).Result()
 	if err != nil {
 		return err
 	}
@@ -467,7 +466,7 @@ func DeleteDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string) 
 	}
 	for _, volume := range volumes {
 		err = cs.CoreV1().PersistentVolumeClaims("default").Delete(
-			context.TODO(),
+			ctx,
 			volume.VolumeSource.PersistentVolumeClaim.ClaimName,
 			metav1.DeleteOptions{})
 		if err != nil {
@@ -475,9 +474,9 @@ func DeleteDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string) 
 		}
 	}
 
-	_ = cs.CoreV1().Services("default").Delete(context.TODO(), sessionID, metav1.DeleteOptions{})
+	_ = cs.CoreV1().Services("default").Delete(ctx, sessionID, metav1.DeleteOptions{})
 
-	ingress, err := cs.NetworkingV1().Ingresses("default").Get(context.TODO(), "minimal-ingress", metav1.GetOptions{})
+	ingress, err := cs.NetworkingV1().Ingresses("default").Get(ctx, "minimal-ingress", metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to get the ingress %s", "minimal-ingress")
 	}
@@ -489,14 +488,14 @@ func DeleteDeploy(cs *kubernetes.Clientset, rc *redis.Client, sessionID string) 
 	}
 	ingress.Spec.Rules = filteredRules
 
-	_, err = cs.NetworkingV1().Ingresses("default").Update(context.TODO(), ingress, metav1.UpdateOptions{})
+	_, err = cs.NetworkingV1().Ingresses("default").Update(ctx, ingress, metav1.UpdateOptions{})
 
 	if err != nil {
 		return fmt.Errorf("failed to update ingress %s", "minimal-ingress")
 	}
 
 	_, err = rc.Del(
-		context.TODO(),
+		ctx,
 		sessionID).Result()
 	return err
 }
