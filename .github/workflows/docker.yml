@@ -58,10 +58,12 @@ jobs:
           kubectl wait --namespace ingress-nginx \
             --for=condition=ready pod \
             --selector=app.kubernetes.io/component=controller \
-            --timeout=90s && exit 0
+            --timeout=90s
       -
         name: get ingress controller logs
-        run: kubectl logs deployment/ingress-nginx-controller
+        run: |
+          sleep 90
+          kubectl logs deployment/ingress-nginx-controller
       -
         name: Checkout
         uses: actions/checkout@v4
