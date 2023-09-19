@@ -62,8 +62,8 @@ jobs:
       -
         name: get ingress controller logs
         run: |
-          sleep 90
-          kubectl logs deployment/ingress-nginx-controller
+          sleep 20
+          kubectl logs -n ingress-nginx deployment/ingress-nginx-controller
       -
         name: Checkout
         uses: actions/checkout@v4
