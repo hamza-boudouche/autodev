@@ -28,7 +28,7 @@ jobs:
   #       with:
   #         context: .
   #         file: ./Dockerfile
-  #         push: true
+  #         push: false
   #         tags: ${{ secrets.DOCKERHUB_USERNAME }}/autodev:latest
   e2e-test:
     # needs: build
@@ -38,6 +38,9 @@ jobs:
         name: Create k8s Kind Cluster
         uses: helm/kind-action@v1.5.0
       -
-        name: check cluster nodes
+        name: check cluster nodes to verify readiness
         run: kubectl get nodes
+      -
+        name: get storage classes
+        run: kubectl get storageclass
 
