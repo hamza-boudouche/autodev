@@ -63,7 +63,7 @@ jobs:
         name: get ingress controller logs
         run: |
           sleep 10
-          kubectl describe -n ingress-nginx --selector=app.kubernetes.io/component=controller
+          kubectl describe pod -n ingress-nginx --selector=app.kubernetes.io/component=controller
           kubectl -n ingress-nginx get all
           kubectl logs -n ingress-nginx deployment/ingress-nginx-controller
       -
