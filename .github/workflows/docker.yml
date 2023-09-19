@@ -46,7 +46,9 @@ jobs:
         uses: helm/kind-action@v1.5.0
       -
         name: check cluster nodes to verify readiness
-        run: kubectl get nodes
+        run: |
+          kubectl label nodes chart-testing-control-plane ingress-ready=true
+          kubectl get nodes
       -
         name: install nginx ingress controller
         run: |
