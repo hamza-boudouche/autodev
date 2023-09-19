@@ -7,29 +7,36 @@ on:
       - "e2e-test"
 
 jobs:
-  # build:
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     -
-  #       name: Checkout
-  #       uses: actions/checkout@v4
-  #     -
-  #       name: Login to Docker Hub
-  #       uses: docker/login-action@v3
-  #       with:
-  #         username: ${{ secrets.DOCKERHUB_USERNAME }}
-  #         password: ${{ secrets.DOCKERHUB_TOKEN }}
-  #     -
-  #       name: Set up Docker Buildx
-  #       uses: docker/setup-buildx-action@v3
-  #     -
-  #       name: Build and push
-  #       uses: docker/build-push-action@v5
-  #       with:
-  #         context: .
-  #         file: ./Dockerfile
-  #         push: false
-  #         tags: ${{ secrets.DOCKERHUB_USERNAME }}/autodev:latest
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v4
+      # -
+      #   name: Login to Docker Hub
+      #   uses: docker/login-action@v3
+      #   with:
+      #     username: ${{ secrets.DOCKERHUB_USERNAME }}
+      #     password: ${{ secrets.DOCKERHUB_TOKEN }}
+      -
+        name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      -
+        name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/autodev:latest
+          outputs: type=docker,dest=/tmp/autodev.tar
+      -
+        name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: myimage
+          path: /tmp/autodev.tar
   e2e-test:
     # needs: build
     runs-on: ubuntu-latest
@@ -51,7 +58,10 @@ jobs:
           kubectl wait --namespace ingress-nginx \
             --for=condition=ready pod \
             --selector=app.kubernetes.io/component=controller \
-            --timeout=90s
+            --timeout=90s && exit 0
+      -
+        name: get ingress controller logs
+        run: kubectl logs deployment/ingress-nginx-controller
       -
         name: Checkout
         uses: actions/checkout@v4
@@ -61,4 +71,15 @@ jobs:
       -
         name: get ingress
         run: kubectl get ingress
+      -
+        name: Download artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: autodev
+          path: /tmp
+      -
+        name: Load image
+        run: |
+          docker load --input /tmp/autodev.tar
+          docker image ls -a
 
