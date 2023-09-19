@@ -41,6 +41,24 @@ jobs:
         name: check cluster nodes to verify readiness
         run: kubectl get nodes
       -
-        name: get storage classes
-        run: kubectl get storageclass
+        name: install nginx ingress controller
+        run: |
+          kubectl apply -f \
+            https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
+      -
+        name: wait for nginx ingress controller to be ready
+        run: |
+          kubectl wait --namespace ingress-nginx \
+            --for=condition=ready pod \
+            --selector=app.kubernetes.io/component=controller \
+            --timeout=90s
+      -
+        name: Checkout
+        uses: actions/checkout@v4
+      -
+        name: create minimal-ingress
+        run: kubectl apply -f ./k8s-manifests/minimal-ingress.yaml
+      -
+        name: get ingress
+        run: kubectl get ingress
 
