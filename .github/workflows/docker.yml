@@ -72,12 +72,12 @@ jobs:
       -
         name: Checkout
         uses: actions/checkout@v4
-      -
-        name: create minimal-ingress
-        run: kubectl apply -f ./k8s-manifests/minimal-ingress.yaml
-      -
-        name: get ingress
-        run: kubectl get ingress
+      # -
+      #   name: create minimal-ingress
+      #   run: kubectl apply -f ./k8s-manifests/minimal-ingress.yaml
+      # -
+      #   name: get ingress
+      #   run: kubectl get ingress
       -
         name: Download artifact
         uses: actions/download-artifact@v3
@@ -89,4 +89,21 @@ jobs:
         run: |
           docker load --input /tmp/autodev.tar
           docker image ls -a
+
+      -
+        name: Deploy Autodev
+        run: kubectl apply -f ./k8s-manifests/minimal-ingress.yaml
+
+      -
+        name: Wait for Autodev deployment to be ready
+        run: |
+          kubectl wait --namespace ingress-nginx \
+            --for=condition=ready pod \
+            --selector=app=autodev \
+            --timeout=90s
+
+      -
+        name: Check if the server is working
+        run: |
+          curl http://localhost/healthcheck
 

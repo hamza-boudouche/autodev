@@ -28,6 +28,12 @@ func main() {
 
 	r := gin.Default()
 
+	r.GET("/healthcheck", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+            "message": "server is running",
+		})
+	})
+
 	r.POST("/init/:sessionID", func(c *gin.Context) {
 		sessionID := strings.ReplaceAll(c.Param("sessionID"), "/", "")
 		err := ss.InitSession(c.Request.Context(),rc, kcs, sessionID)
