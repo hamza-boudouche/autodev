@@ -95,8 +95,12 @@ jobs:
           kubectl -n default logs -l app=autodev --tail -1
           kubectl -n default get services
           kubectl -n default get ingresses
+
+      -
+        name: Configure host
+        run: echo "127.0.0.1   www.hamzaboudouche.tech"
       -
         name: Check if the server is working
         run: |
-          curl http://localhost/healthcheck
+          curl http://www.hamzaboudouche.tech/healthcheck
 
