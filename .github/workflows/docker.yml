@@ -82,7 +82,7 @@ jobs:
         name: Download artifact
         uses: actions/download-artifact@v3
         with:
-          name: autodev
+          name: autodev.tar
           path: /tmp
       -
         name: Load image
