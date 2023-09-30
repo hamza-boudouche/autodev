@@ -97,7 +97,7 @@ jobs:
       -
         name: Wait for Autodev deployment to be ready
         run: |
-          kubectl wait --namespace ingress-nginx \
+          kubectl wait --namespace default \
             --for=condition=ready pod \
             --selector=app=autodev \
             --timeout=90s
