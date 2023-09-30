@@ -38,7 +38,7 @@ jobs:
           name: myimage
           path: /tmp/autodev.tar
   e2e-test:
-    # needs: build
+    needs: build
     runs-on: ubuntu-latest
     steps:
       -
