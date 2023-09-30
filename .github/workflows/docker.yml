@@ -102,5 +102,7 @@ jobs:
       -
         name: Check if the server is working
         run: |
+          dig +short www.hamzaboudouche.tech
+          telnet www.hamzaboudouche.tech 80
           curl http://www.hamzaboudouche.tech/healthcheck
 
