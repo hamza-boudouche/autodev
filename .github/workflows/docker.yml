@@ -61,23 +61,9 @@ jobs:
             --for=condition=ready pod \
             --selector=app.kubernetes.io/component=controller \
             --timeout=90s
-      # -
-      #   name: get ingress controller logs
-      #   run: |
-      #     sleep 10
-      #     kubectl describe node chart-testing-control-plane
-      #     kubectl describe pod -n ingress-nginx --selector=app.kubernetes.io/component=controller
-      #     kubectl -n ingress-nginx get all
-      #     kubectl logs -n ingress-nginx deployment/ingress-nginx-controller
       -
         name: Checkout
         uses: actions/checkout@v4
-      # -
-      #   name: create minimal-ingress
-      #   run: kubectl apply -f ./k8s-manifests/minimal-ingress.yaml
-      # -
-      #   name: get ingress
-      #   run: kubectl get ingress
       -
         name: Download artifact
         uses: actions/download-artifact@v3
@@ -101,7 +87,14 @@ jobs:
             --for=condition=ready pod \
             --selector=app=autodev \
             --timeout=90s
-
+      -
+        name: Print statuses of ressources
+        run: |
+          kubectl -n default get pods
+          kubectl -n default get deployments
+          kubectl -n default logs -l app=autodev --tail -1
+          kubectl -n default get services
+          kubectl -n default get ingresses
       -
         name: Check if the server is working
         run: |
