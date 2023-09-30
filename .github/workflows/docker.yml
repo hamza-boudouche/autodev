@@ -35,7 +35,7 @@ jobs:
         name: Upload artifact
         uses: actions/upload-artifact@v3
         with:
-          name: myimage
+          name: autodev
           path: /tmp/autodev.tar
   e2e-test:
     needs: build
