@@ -96,13 +96,11 @@ jobs:
           kubectl -n default get services
           kubectl -n default get ingresses
 
-      -
-        name: Configure host
-        run: sudo echo "127.0.0.1   www.hamzaboudouche.tech" | sudo tee -a /etc/hosts
+      # -
+      #   name: Configure host
+      #   run: sudo echo "127.0.0.1   www.hamzaboudouche.tech" | sudo tee -a /etc/hosts
       -
         name: Check if the server is working
         run: |
-          dig +short www.hamzaboudouche.tech
-          telnet www.hamzaboudouche.tech 80
-          curl http://www.hamzaboudouche.tech/healthcheck
+          curl http://localhost/healthcheck
 

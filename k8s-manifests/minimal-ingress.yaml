@@ -4,16 +4,15 @@ metadata:
   name: minimal-ingress
 spec:
   rules:
-  - host: www.hamzaboudouche.tech
-    http:
-      paths:
-      - pathType: Prefix
-        path: /
-        backend:
-          service:
-            name: autodev
-            port:
-              number: 8080
+  - http:
+    paths:
+    - pathType: Prefix
+      path: /
+      backend:
+        service:
+          name: autodev
+          port:
+            number: 8080
 ---
 apiVersion: v1
 kind: ServiceAccount
