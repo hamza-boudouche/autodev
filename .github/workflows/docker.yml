@@ -37,9 +37,21 @@ jobs:
         with:
           name: autodev
           path: /tmp/autodev.tar
+  list-tests:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v2
+      - id: set-matrix
+        run: echo "::set-output name=matrix::$(ls tests/*.sh | jq -R -s -c 'split("\n")[:-1]')"
   e2e-test:
     needs: build
+    needs: list-tests
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        test: ${{ fromJson(needs.list-tests.outputs.matrix) }}
     steps:
       -
         name: Create k8s Kind Cluster
@@ -106,7 +118,7 @@ jobs:
       -
         name: run tests
         run: |
-          bash ./tests/test.sh
+          bash ./tests/${{matrix.test}}
       -
         name: Print statuses and logs of ressources
         if: always()
