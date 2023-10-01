@@ -94,14 +94,6 @@ jobs:
         run: |
           sleep 10
       -
-        name: Print statuses of ressources
-        run: |
-          kubectl -n default get pods
-          kubectl -n default get deployments
-          kubectl -n default logs -l app=autodev -c autodev --tail -1
-          kubectl -n default get services
-          kubectl -n default get ingresses
-      -
         name: Setup Kubernetes port-forward daemon
         uses: vbem/k8s-port-forward@v1
         with:
@@ -115,4 +107,13 @@ jobs:
         name: run tests
         run: |
           bash ./tests/test.sh
+      -
+        name: Print statuses and logs of ressources
+        if: always()
+        run: |
+          kubectl -n default get pods
+          kubectl -n default get deployments
+          kubectl -n default get services
+          kubectl -n default get ingresses
+          kubectl -n default logs -l app=autodev -c autodev --tail -1
 
