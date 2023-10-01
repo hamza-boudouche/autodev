@@ -104,5 +104,5 @@ jobs:
       -
         name: Check if the server is working
         run: |
-          curl http://localhost/healthcheck
+          curl http://localhost:8080/healthcheck
 
