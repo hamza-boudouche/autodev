@@ -54,7 +54,7 @@ spec:
         image:  hamza13/autodev:latest
         imagePullPolicy: Never
         ports:
-        - containerPort:
+        - containerPort: 8080
           name:  http
       containers:
       - name:  redis
