@@ -112,11 +112,11 @@ jobs:
       #   with:
       #     workload: 'svc/autodev'
       #     mappings: '8080:8080'
-      -
-        name: Configure host
-        run: sudo echo "127.0.0.1   www.hamzaboudouche.tech" | sudo tee -a /etc/hosts
-      -
+      # -
+      #   name: Configure host
+      #   run: sudo echo "127.0.0.1   www.hamzaboudouche.tech" | sudo tee -a /etc/hosts
+      # -
         name: Check if the server is working
         run: |
-          curl http://www.hamzaboudouche.tech/healthcheck
+          curl http://localhost/healthcheck
 

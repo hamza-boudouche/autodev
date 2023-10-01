@@ -4,8 +4,7 @@ metadata:
   name: minimal-ingress
 spec:
   rules:
-  - host: www.hamzaboudouche.tech
-    http:
+  - http:
       paths:
       - pathType: Prefix
         path: /
