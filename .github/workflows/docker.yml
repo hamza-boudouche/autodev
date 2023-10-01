@@ -78,7 +78,7 @@ jobs:
       -
         name: Load image into kind cluster
         run: |
-          kind load docker-image hamza13/autodev:latest -n kind
+          kind load docker-image hamza13/autodev:latest -n chart-testing
       -
         name: Deploy Autodev
         run: kubectl apply -f ./k8s-manifests/minimal-ingress.yaml
