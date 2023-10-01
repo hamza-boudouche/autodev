@@ -71,18 +71,21 @@ jobs:
           name: autodev
           path: /tmp
       -
-        name: Load image
+        name: Load image into docker
         run: |
           docker load --input /tmp/autodev.tar
           docker image ls -a
-
+      -
+        name: Load image into kind cluster
+        run: |
+          kind load docker-image hamza13/autodev:latest -n kind
       -
         name: Deploy Autodev
         run: kubectl apply -f ./k8s-manifests/minimal-ingress.yaml
       -
         name: wait for some time
         run: |
-          sleep 120
+          sleep 30
           kubectl -n default logs -l app=autodev -c autodev --tail -1
       -
         name: Wait for Autodev deployment to be ready
