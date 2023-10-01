@@ -46,8 +46,7 @@ jobs:
       - id: set-matrix
         run: echo "::set-output name=matrix::$(ls tests/*.sh | jq -R -s -c 'split("\n")[:-1]')"
   e2e-test:
-    needs: build
-    needs: list-tests
+    needs: [build, list-tests]
     runs-on: ubuntu-latest
     strategy:
       matrix:
