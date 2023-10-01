@@ -88,6 +88,10 @@ jobs:
             --selector=app=autodev \
             --timeout=90s
       -
+        name: waiting for server to run (remove this after adding k8s probes)
+        run: |
+          sleep 10
+      -
         name: Print statuses of ressources
         run: |
           kubectl -n default get pods
