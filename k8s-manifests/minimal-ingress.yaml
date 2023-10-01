@@ -1,0 +1,79 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: minimal-ingress
+spec:
+  rules:
+  - http:
+      paths:
+      - pathType: Prefix
+        path: /
+        backend:
+          service:
+            name: autodev
+            port:
+              number: 8080
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: autodev
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: autodev
+rules:
+  - apiGroups: [""]
+    resources: ["deployments", "services", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["extensions"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name:  autodev
+  namespace: default
+  labels:
+    app:  autodev
+spec:
+  selector:
+    matchLabels:
+      app: autodev
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app:  autodev
+    spec:
+      serviceAccountName: autodev
+      containers:
+      - name:  autodev
+        image:  hamza13/autodev:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8080
+          name:  http
+      - name:  redis
+        image:  redis:alpine
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort:  6379
+          name:  redis
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: autodev
+spec:
+  selector:
+    app: autodev
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+  type: ClusterIP
+

@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "main"
+      - "e2e-test"
 
 jobs:
   build:
@@ -12,12 +13,12 @@ jobs:
       -
         name: Checkout
         uses: actions/checkout@v4
-      -
-        name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # -
+      #   name: Login to Docker Hub
+      #   uses: docker/login-action@v3
+      #   with:
+      #     username: ${{ secrets.DOCKERHUB_USERNAME }}
+      #     password: ${{ secrets.DOCKERHUB_TOKEN }}
       -
         name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -27,6 +28,129 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          push: true
+          push: false
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/autodev:latest
+          outputs: type=docker,dest=/tmp/autodev.tar
+      -
+        name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: autodev
+          path: /tmp/autodev.tar
+  list-tests:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v2
+      - id: set-matrix
+        run: echo "::set-output name=matrix::$(ls tests/*.sh | jq -R -s -c 'split("\n")[:-1]')"
+  e2e-test:
+    needs: [build, list-tests]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        test: ${{ fromJson(needs.list-tests.outputs.matrix) }}
+    steps:
+      -
+        name: Create k8s Kind Cluster
+        uses: helm/kind-action@v1.5.0
+      -
+        name: check cluster nodes to verify readiness
+        run: |
+          kubectl label nodes chart-testing-control-plane ingress-ready=true
+          kubectl get nodes
+      -
+        name: install nginx ingress controller
+        run: |
+          kubectl apply -f \
+            https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
+      -
+        name: wait for nginx ingress controller to be ready
+        run: |
+          kubectl wait --namespace ingress-nginx \
+            --for=condition=ready pod \
+            --selector=app.kubernetes.io/component=controller \
+            --timeout=90s
+      -
+        name: Checkout
+        uses: actions/checkout@v4
+      -
+        name: Download artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: autodev
+          path: /tmp
+      -
+        name: Load image into docker
+        run: |
+          docker load --input /tmp/autodev.tar
+          docker image ls -a
+      -
+        name: Load image into kind cluster
+        run: |
+          kind load docker-image hamza13/autodev:latest -n chart-testing
+      -
+        name: Deploy Autodev
+        run: kubectl apply -f ./k8s-manifests/minimal-ingress.yaml
+      -
+        name: Wait for Autodev deployment to be ready
+        run: |
+          kubectl wait --namespace default \
+            --for=condition=ready pod \
+            --selector=app=autodev \
+            --timeout=90s
+      -
+        name: waiting for server to run (remove this after adding k8s probes)
+        run: |
+          sleep 10
+      -
+        name: Setup Kubernetes port-forward daemon
+        uses: vbem/k8s-port-forward@v1
+        with:
+          workload: 'svc/autodev'
+          mappings: '8080:8080'
+      -
+        name: Check if the server is working
+        run: |
+          curl http://localhost:8080/healthcheck
+      -
+        name: run tests
+        run: |
+          bash ${{matrix.test}}
+      -
+        name: Print statuses and logs of ressources
+        if: always()
+        run: |
+          kubectl -n default get pods
+          kubectl -n default get deployments
+          kubectl -n default get services
+          kubectl -n default get ingresses
+          kubectl -n default logs -l app=autodev -c autodev --tail -1
+  push:
+    runs-on: ubuntu-latest
+    needs: [build, e2e-test]
+    steps:
+      -
+        name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      -
+        name: Download artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: autodev
+          path: /tmp
+      -
+        name: Load image into docker
+        run: |
+          docker load --input /tmp/autodev.tar
+          docker image ls -a
+      -
+        name: push docker image
+        run: |
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/autodev:latest
 
