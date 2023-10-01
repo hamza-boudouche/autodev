@@ -95,10 +95,12 @@ jobs:
           kubectl -n default logs -l app=autodev --tail -1
           kubectl -n default get services
           kubectl -n default get ingresses
-
-      # -
-      #   name: Configure host
-      #   run: sudo echo "127.0.0.1   www.hamzaboudouche.tech" | sudo tee -a /etc/hosts
+      -
+        name: Setup Kubernetes port-forward daemon
+        uses: vbem/k8s-port-forward@v1
+        with:
+          workload: 'svc/autodev'
+          mappings: '8080:8080'
       -
         name: Check if the server is working
         run: |
