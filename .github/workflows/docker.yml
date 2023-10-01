@@ -130,7 +130,7 @@ jobs:
           kubectl -n default logs -l app=autodev -c autodev --tail -1
   push:
     runs-on: ubuntu-latest
-    needs: build
+    needs: [build, e2e-test]
     steps:
       -
         name: Login to Docker Hub
