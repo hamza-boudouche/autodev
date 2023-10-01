@@ -79,7 +79,11 @@ jobs:
       -
         name: Deploy Autodev
         run: kubectl apply -f ./k8s-manifests/minimal-ingress.yaml
-
+      -
+        name: wait for some time
+        run: |
+          sleep 120
+          kubectl -n default logs -l app=autodev -c autodev --tail -1
       -
         name: Wait for Autodev deployment to be ready
         run: |
