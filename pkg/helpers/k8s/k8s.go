@@ -2,9 +2,10 @@ package k8s
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
+
+    "github.com/hamza-boudouche/autodev/pkg/helpers/logging"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -16,29 +17,38 @@ import (
 )
 
 func GetK8sClient() (*kubernetes.Clientset, error) {
+    logging.Logger.Info("constructing the k8s clientset")
 	_, inKubernetes := os.LookupEnv("KUBERNETES_SERVICE_HOST")
+    logging.Logger.Info("checking for env var", "KUBERNETES_SERVICE_HOST", inKubernetes)
 	if inKubernetes {
-		fmt.Println("Running inside a Kubernetes cluster.")
+		logging.Logger.Info("detected running inside a Kubernetes cluster.")
 		config, err := rest.InClusterConfig()
 		if err != nil {
+		    logging.Logger.Error("failed to get in-cluster config")
 			return nil, err
 		}
 		// creates the clientset
 		clientset, err := kubernetes.NewForConfig(config)
 		if err != nil {
+		    logging.Logger.Error("failed to construct clientset from config")
 			return nil, err
 		}
+        logging.Logger.Info("k8s clientset created successfully")
 		return clientset, nil
 	} else {
-		fmt.Println("Not running inside a Kubernetes cluster.")
-		config, err := clientcmd.BuildConfigFromFlags("", filepath.Join(homedir.HomeDir(), ".kube", "config"))
+		logging.Logger.Info("not running inside a Kubernetes cluster.")
+        pathToConfig := filepath.Join(homedir.HomeDir(), ".kube", "config")
+		config, err := clientcmd.BuildConfigFromFlags("", pathToConfig)
 		if err != nil {
+		    logging.Logger.Error("failed to get config from file", "filePath", pathToConfig)
 			return nil, err
 		}
 		clientset, err := kubernetes.NewForConfig(config)
 		if err != nil {
+		    logging.Logger.Error("failed to construct clientset from config")
 			return nil, err
 		}
+        logging.Logger.Info("k8s clientset created successfully")
 		return clientset, nil
 	}
 }
@@ -68,6 +78,7 @@ func CreatePV(ctx context.Context, cs *kubernetes.Clientset, name string, capaci
 }
 
 func CreatePVC(ctx context.Context, cs *kubernetes.Clientset, name string, capacity string) error {
+    logging.Logger.Info("creating PVC", "PVCName", name, "capacity", capacity)
 	pvc := &v1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -83,6 +94,9 @@ func CreatePVC(ctx context.Context, cs *kubernetes.Clientset, name string, capac
 		},
 	}
 	_, err := cs.CoreV1().PersistentVolumeClaims("default").Create(ctx, pvc, metav1.CreateOptions{})
+    if err != nil {
+        logging.Logger.Error("failed to create PVC", "PVCName", name, "capacity", capacity)
+    }
 	return err
 }
 

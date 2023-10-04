@@ -24,7 +24,7 @@ func main() {
 		panic(err)
 	}
 
-	rc := cache.CreateRedisClient()
+	cc := cache.CreateEtcdClient()
 
 	r := gin.Default()
 
@@ -36,7 +36,7 @@ func main() {
 
 	r.POST("/init/:sessionID", func(c *gin.Context) {
 		sessionID := strings.ReplaceAll(c.Param("sessionID"), "/", "")
-		err := ss.InitSession(c.Request.Context(),rc, kcs, sessionID)
+		err := ss.InitSession(c.Request.Context(),cc, kcs, sessionID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": fmt.Sprintf("failed to initialize session %s", sessionID),
@@ -57,7 +57,7 @@ func main() {
 			})
 			return
 		}
-		err := ss.CreateDeploy(c.Request.Context(),kcs, rc, sessionID, body.Components)
+		err := ss.CreateDeploy(c.Request.Context(),kcs, cc, sessionID, body.Components)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": fmt.Sprintf("failed to create components for session %s", sessionID),
@@ -121,7 +121,7 @@ func main() {
 
 	r.POST("/refresh/:sessionID", func(c *gin.Context) {
 		sessionID := strings.ReplaceAll(c.Param("sessionID"), "/", "")
-		sessionInfo, err := ss.RefreshDeploy(c.Request.Context(),kcs, rc, sessionID)
+		sessionInfo, err := ss.RefreshDeploy(c.Request.Context(),kcs, cc, sessionID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": fmt.Sprintf("failed to refresh session %s", sessionID),
@@ -136,7 +136,7 @@ func main() {
 
 	r.PATCH("/toggle/:sessionID", func(c *gin.Context) {
 		sessionID := strings.ReplaceAll(c.Param("sessionID"), "/", "")
-		err := ss.ToggleDeploy(c.Request.Context(),kcs, rc, sessionID)
+		err := ss.ToggleDeploy(c.Request.Context(),kcs, cc, sessionID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": fmt.Sprintf("failed to toggle session %s", sessionID),
@@ -150,7 +150,7 @@ func main() {
 
 	r.DELETE("/:sessionID", func(c *gin.Context) {
 		sessionID := strings.ReplaceAll(c.Param("sessionID"), "/", "")
-		err := ss.DeleteDeploy(c.Request.Context(),kcs, rc, sessionID)
+		err := ss.DeleteDeploy(c.Request.Context(),kcs, cc, sessionID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": fmt.Sprintf("failed to delete session %s", sessionID),
