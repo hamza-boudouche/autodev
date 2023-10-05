@@ -9,8 +9,9 @@ import (
 	"strings"
 
 	cmp "github.com/hamza-boudouche/autodev/pkg/components"
+    "github.com/hamza-boudouche/autodev/pkg/helpers/logging"
 	"github.com/hamza-boudouche/autodev/pkg/helpers/k8s"
-	"github.com/redis/go-redis/v9"
+    clientv3 "go.etcd.io/etcd/client/v3"
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -32,22 +33,29 @@ type SessionInfo struct {
 	Components   []cmp.Component `json:"components"`
 }
 
-func InitSession(ctx context.Context, rc *redis.Client, kcs *kubernetes.Clientset, sessionID string) error {
-	_, err := rc.Get(ctx, sessionID).Result()
-	if err == redis.Nil {
-		// session has not been initialized before, proceed to initialize
-		rc.Set(ctx, sessionID, 1, 0)
+func InitSession(ctx context.Context, cc *clientv3.Client, kcs *kubernetes.Clientset, sessionID string) error {
+    logging.Logger.Info("initializing session", "sessionID", sessionID)
+	resp, err := cc.Get(ctx, sessionID)
+	if len(resp.Kvs) == 0 {
+		logging.Logger.Info("session has not been initialized before, proceed to initialize", "sessionID", sessionID)
+        _, err := cc.Put(ctx, sessionID, "{}")
+        if err != nil {
+            logging.Logger.Error("failed to write key to etcd while initializing session", "sessionID", sessionID)
+            return err
+        }
+        logging.Logger.Info("key written to etcd successfully while initializing session", "sessionID", sessionID)
 		return k8s.CreatePVC(ctx, kcs, sessionID, "10Mi")
 	} else if err != nil {
-		// some error other than key not found occured, abort
+		logging.Logger.Error("some error other than key not found occured", "sessionID", sessionID)
 		return err
 	}
-	// session was found, no need to initialize again
+	logging.Logger.Info("session was found, no need to initialize again", "sessionID", sessionID)
 	return fmt.Errorf("session %s already exists", sessionID)
 }
 
 func ExposeSession(ctx context.Context, cs *kubernetes.Clientset, sessionID string, components []cmp.Component, ingressName string) ([]cmp.Component, error) {
 	// create all the port that need to be exposed
+    logging.Logger.Info("Exposing session", "session", sessionID)
 	ports := make([]v1.ServicePort, 0, len(components))
 	for _, component := range components {
 		if component.ExposeComponent {
@@ -73,14 +81,18 @@ func ExposeSession(ctx context.Context, cs *kubernetes.Clientset, sessionID stri
 	}
 	_, err := cs.CoreV1().Services("default").Create(ctx, service, metav1.CreateOptions{})
 	if err != nil {
+        logging.Logger.Error("failed to create session service", "session", sessionID)
 		return nil, errors.New(fmt.Sprintf("failed to create service for session %s", sessionID))
 	}
+    logging.Logger.Info("created service successfully", "session", sessionID)
 
 	// update ingress with a new entry
 	ingress, err := cs.NetworkingV1().Ingresses("default").Get(ctx, ingressName, metav1.GetOptions{})
 	if err != nil {
+        logging.Logger.Error("failed to get ingress", "ingressName", ingressName)
 		return nil, errors.New(fmt.Sprintf("failed to get ingress %s", ingressName))
 	}
+    logging.Logger.Info("ingress found", "ingressName", ingressName)
 	pathType := networkingv1.PathTypePrefix
 	rules := make([]networkingv1.IngressRule, 0, len(ports))
 	for i, component := range components {
@@ -114,18 +126,29 @@ func ExposeSession(ctx context.Context, cs *kubernetes.Clientset, sessionID stri
 	ingress.Spec.Rules = append(ingress.Spec.Rules, rules...)
 	_, err = cs.NetworkingV1().Ingresses("default").Update(ctx, ingress, metav1.UpdateOptions{})
 	if err != nil {
+        logging.Logger.Error("failed to update ingress rules", "sessionID", sessionID)
 		return nil, fmt.Errorf("failed to update the ingress %s with a new rule for the session %s", ingressName, sessionID)
 	}
+    logging.Logger.Info("updated ingress rules successfully", "sessionID", sessionID)
 	return components, nil
 }
 
-func CreateDeploy(ctx context.Context, cs *kubernetes.Clientset, rc *redis.Client, sessionID string, components []cmp.Component) error {
-	sessionState, err := rc.Get(ctx, sessionID).Result()
+func CreateDeploy(ctx context.Context, cs *kubernetes.Clientset, cc *clientv3.Client, sessionID string, components []cmp.Component) error {
+    logging.Logger.Info("creating deployment", "sessionID", sessionID)
+    logging.Logger.Info("reading sessionID", "sessionID", sessionID)
+	resp, err := cc.Get(ctx, sessionID)
 	if err != nil {
+        logging.Logger.Error("failed to read session Info from etcd", "sessionID", sessionID)
 		return err
 	}
-	if sessionState != "1" {
+    if len(resp.Kvs) == 0 {
+        logging.Logger.Error("session Info not found", "sessionID", sessionID)
+		return fmt.Errorf("session info not found for session %s", sessionID)
+    }
+    sessionState := string(resp.Kvs[0].Value)
+	if sessionState != "{}" {
 		// session hasn't been just created
+        logging.Logger.Error("session already populated", "sessionID", sessionID)
 		return errors.New(fmt.Sprintf("session %s is already populated, delete and reinitialize first", sessionID))
 	}
 	var replicas *int32
@@ -133,22 +156,22 @@ func CreateDeploy(ctx context.Context, cs *kubernetes.Clientset, rc *redis.Clien
 	*replicas = 1
 	containers, volumes, err := cmp.ParseComponents(components, sessionID)
 	if err != nil {
+        logging.Logger.Error("failed to parse components for the new deployment", "sessionID", sessionID)
 		return err
 	}
 
-	// create persistant volumes and persistant volume claims for each volume
+	logging.Logger.Info("create PVCs for each volume", "sessionID", sessionID)
 	for _, volume := range volumes {
 		if volume.Name == sessionID {
+            logging.Logger.Info("skipping main IDE volume", "sessionID", sessionID)
 			continue
 		}
-		// err := CreatePV(cs, volume.Name, "20Mi")
-		// if err != nil {
-		// 	return err
-		// }
 		err = k8s.CreatePVC(ctx, cs, volume.Name, "20Mi")
 		if err != nil {
+	        logging.Logger.Error("failed to create PVC", "sessionID", sessionID, "PVCName", volume.Name)
 			return err
 		}
+	    logging.Logger.Info("created PVC successfully", "sessionID", sessionID, "PVCName", volume.Name)
 	}
 
 	containerValues := make([]v1.Container, len(containers))
@@ -190,24 +213,29 @@ func CreateDeploy(ctx context.Context, cs *kubernetes.Clientset, rc *redis.Clien
 	// Create the Deployment
 	_, err = cs.AppsV1().Deployments("default").Create(ctx, deployment, metav1.CreateOptions{})
 	if err != nil {
+        logging.Logger.Error("failed to create the deployment ressource", "sessionID", sessionID)
 		return err
 	}
+    logging.Logger.Info("created the deployment ressource successfully", "sessionID", sessionID)
 
 	// expose the deployment
 	components, err = ExposeSession(ctx, cs, sessionID, components, "minimal-ingress")
 	if err != nil {
 		return err
 	}
+    logging.Logger.Info("exposed the session successfully", "sessionID", sessionID)
 
 	sessionJSON, _ := json.Marshal(SessionInfo{
 		SessionState: Initialized,
 		Components:   components,
 	})
-	_, err = rc.Set(
+	_, err = cc.Put(
 		ctx,
 		sessionID,
-		string(sessionJSON),
-		0).Result()
+		string(sessionJSON))
+    if err != nil {
+        logging.Logger.Error("failed to write session status in etcd", "sessionID", sessionID)
+    }
 	return err
 }
 
@@ -248,14 +276,17 @@ func ContainerStatus(ctx context.Context, cs *kubernetes.Clientset, sessionID st
 	return res, nil
 }
 
-func RefreshDeploy(ctx context.Context, cs *kubernetes.Clientset, rc *redis.Client, sessionID string) (*SessionInfo, error) {
+func RefreshDeploy(ctx context.Context, cs *kubernetes.Clientset, cc *clientv3.Client, sessionID string) (*SessionInfo, error) {
 	// get stored SessionInfo
-	sessionJSON, err := rc.Get(ctx, sessionID).Result()
+	resp, err := cc.Get(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
+    if len(resp.Kvs) == 0 {
+        return nil, fmt.Errorf("session %s not found", sessionID)
+    }
 	var session SessionInfo
-	err = json.Unmarshal([]byte(sessionJSON), &session)
+	err = json.Unmarshal([]byte(resp.Kvs[0].Value), &session)
 	if err != nil {
 		return nil, err
 	}
@@ -270,11 +301,10 @@ func RefreshDeploy(ctx context.Context, cs *kubernetes.Clientset, rc *redis.Clie
 			// deployment is ready
 			session.SessionState = Running
 			sessionJSON, _ := json.Marshal(session)
-			_, err = rc.Set(
+			_, err = cc.Put(
 				ctx,
 				sessionID,
-				string(sessionJSON),
-				0).Result()
+				string(sessionJSON))
 			return &session, err
 		} else {
 			return &session, nil
@@ -297,9 +327,9 @@ func RefreshDeploy(ctx context.Context, cs *kubernetes.Clientset, rc *redis.Clie
 					// the pvc was not found
 					// the session was deleted
 					// delete from cache
-					_, err = rc.Del(
+                    _, err := cc.Delete(
 						ctx,
-						sessionID).Result()
+						sessionID)
 					return nil, err
 				}
 			}
@@ -313,9 +343,9 @@ func RefreshDeploy(ctx context.Context, cs *kubernetes.Clientset, rc *redis.Clie
 				// the pvc was not found
 				// the session was deleted
 				// delete from cache
-				_, err = rc.Del(
+				_, err = cc.Delete(
 					ctx,
-					sessionID).Result()
+					sessionID)
 				return nil, err
 			}
 		}
@@ -357,13 +387,16 @@ func GetSessionLogs(ctx context.Context, cs *kubernetes.Clientset, sessionID str
 	return nil, fmt.Errorf("failed to find component %s", componentID)
 }
 
-func ToggleDeploy(ctx context.Context, cs *kubernetes.Clientset, rc *redis.Client, sessionID string) error {
-	sessionJSON, err := rc.Get(ctx, sessionID).Result()
+func ToggleDeploy(ctx context.Context, cs *kubernetes.Clientset, cc *clientv3.Client, sessionID string) error {
+	resp, err := cc.Get(ctx, sessionID)
 	if err != nil {
 		return err
 	}
+    if len(resp.Kvs) == 0 {
+        return fmt.Errorf("session %s not found", sessionID)
+    }
 	var session SessionInfo
-	err = json.Unmarshal([]byte(sessionJSON), &session)
+	err = json.Unmarshal([]byte(resp.Kvs[0].Value), &session)
 	if err != nil {
 		return err
 	}
@@ -376,11 +409,10 @@ func ToggleDeploy(ctx context.Context, cs *kubernetes.Clientset, rc *redis.Clien
 		}
 		session.SessionState = Stopped
 		sessionJSON, _ := json.Marshal(session)
-		_, err = rc.Set(
+		_, err = cc.Put(
 			ctx,
 			sessionID,
-			string(sessionJSON),
-			0).Result()
+			string(sessionJSON))
 		return err
 	} else if session.SessionState == Stopped {
 		// toggle on
@@ -435,11 +467,10 @@ func ToggleDeploy(ctx context.Context, cs *kubernetes.Clientset, rc *redis.Clien
 		}
 		session.SessionState = Running
 		sessionJSON, _ := json.Marshal(session)
-		_, err = rc.Set(
+		_, err = cc.Put(
 			ctx,
 			sessionID,
-			string(sessionJSON),
-			0).Result()
+			string(sessionJSON))
 		return err
 	} else {
 		// session is neither Running nor Stopped
@@ -449,14 +480,17 @@ func ToggleDeploy(ctx context.Context, cs *kubernetes.Clientset, rc *redis.Clien
 	}
 }
 
-func DeleteDeploy(ctx context.Context, cs *kubernetes.Clientset, rc *redis.Client, sessionID string) error {
+func DeleteDeploy(ctx context.Context, cs *kubernetes.Clientset, cc *clientv3.Client, sessionID string) error {
 	cs.AppsV1().Deployments("default").Delete(ctx, sessionID, metav1.DeleteOptions{})
-	sessionJSON, err := rc.Get(ctx, sessionID).Result()
+	resp, err := cc.Get(ctx, sessionID)
 	if err != nil {
 		return err
 	}
+    if len(resp.Kvs) == 0 {
+        return fmt.Errorf("session %s was not found", sessionID)
+    }
 	var session SessionInfo
-	err = json.Unmarshal([]byte(sessionJSON), &session)
+	err = json.Unmarshal([]byte(resp.Kvs[0].Value), &session)
 	if err != nil {
 		// if the json unmarshalling fails then it's because the session was just initialized
 		// we still need to delete the code editor's pvc
@@ -466,9 +500,9 @@ func DeleteDeploy(ctx context.Context, cs *kubernetes.Clientset, rc *redis.Clien
 			metav1.DeleteOptions{},
 		)
 
-		_, err = rc.Del(
+		_, err = cc.Delete(
 			ctx,
-			sessionID).Result()
+			sessionID)
 		return err
 	}
 	_, volumes, err := cmp.ParseComponents(session.Components, sessionID)
@@ -503,8 +537,8 @@ func DeleteDeploy(ctx context.Context, cs *kubernetes.Clientset, rc *redis.Clien
 		return fmt.Errorf("failed to update ingress %s", "minimal-ingress")
 	}
 
-	_, err = rc.Del(
+	_, err = cc.Delete(
 		ctx,
-		sessionID).Result()
+		sessionID)
 	return err
 }
