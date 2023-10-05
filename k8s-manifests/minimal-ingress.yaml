@@ -56,12 +56,12 @@ spec:
         ports:
         - containerPort: 8080
           name:  http
-      - name:  redis
-        image:  redis:alpine
+      - name:  etcd
+        image:  bitnami/etcd:latest
         imagePullPolicy: IfNotPresent
         ports:
-        - containerPort:  6379
-          name:  redis
+        - containerPort:  2379
+          name:  etcd
       restartPolicy: Always
 ---
 apiVersion: v1
