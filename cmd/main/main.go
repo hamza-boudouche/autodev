@@ -8,10 +8,12 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	cmp "github.com/hamza-boudouche/autodev/pkg/components"
 	"github.com/hamza-boudouche/autodev/pkg/helpers/cache"
 	"github.com/hamza-boudouche/autodev/pkg/helpers/k8s"
-    cmp "github.com/hamza-boudouche/autodev/pkg/components"
-    ss "github.com/hamza-boudouche/autodev/pkg/sessions"
+	lck "github.com/hamza-boudouche/autodev/pkg/helpers/locking"
+	"github.com/hamza-boudouche/autodev/pkg/helpers/logging"
+	ss "github.com/hamza-boudouche/autodev/pkg/sessions"
 )
 
 type CreateEnv struct {
@@ -37,6 +39,19 @@ func main() {
 	r.POST("/init/:sessionID", func(c *gin.Context) {
 		sessionName := strings.ReplaceAll(c.Param("sessionID"), "/", "")
         sessionID := fmt.Sprintf("session-%s", sessionName)
+
+        logging.Logger.Info("trying to acquire lock", "session", sessionID)
+        _, release, errLock := lck.AcquireLock(cc, sessionID)
+        defer release()
+        if errLock != nil {
+            logging.Logger.Error("failed to acquire lock", "session", sessionID)
+            c.JSON(http.StatusInternalServerError, gin.H{
+				"error": fmt.Sprintf("failed to initialize session %s", sessionName),
+			})
+			return
+        }
+        logging.Logger.Info("acquired lock successfully", "session", sessionID)
+
 		err := ss.InitSession(c.Request.Context(),cc, kcs, sessionID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -52,6 +67,31 @@ func main() {
 	r.POST("/create/:sessionID", func(c *gin.Context) {
 		sessionName := strings.ReplaceAll(c.Param("sessionID"), "/", "")
         sessionID := fmt.Sprintf("session-%s", sessionName)
+
+        logging.Logger.Info("trying to acquire lock", "session", sessionID)
+        _, releaseSession, errSessionLock := lck.AcquireLock(cc, sessionID)
+        defer releaseSession()
+        if errSessionLock != nil {
+            logging.Logger.Error("failed to acquire lock", "session", sessionID)
+            c.JSON(http.StatusInternalServerError, gin.H{
+				"error": fmt.Sprintf("failed to initialize session %s", sessionName),
+			})
+			return
+        }
+        logging.Logger.Info("acquired lock successfully", "session", sessionID)
+
+        logging.Logger.Info("trying to acquire ingress lock", "session", sessionID)
+        _, releaseIngress, errIngressLock := lck.AcquireLock(cc, "ingress")
+        defer releaseIngress()
+        if errIngressLock != nil {
+            logging.Logger.Error("failed to acquire ingress lock", "session", sessionID)
+            c.JSON(http.StatusInternalServerError, gin.H{
+				"error": fmt.Sprintf("failed to initialize session %s", sessionName),
+			})
+			return
+        }
+        logging.Logger.Info("acquired ingress lock successfully", "session", sessionID)
+
 		var body CreateEnv
 		if err := c.ShouldBindJSON(&body); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
@@ -74,6 +114,19 @@ func main() {
 	r.GET("/statuses/:sessionID", func(c *gin.Context) {
 		sessionName := strings.ReplaceAll(c.Param("sessionID"), "/", "")
         sessionID := fmt.Sprintf("session-%s", sessionName)
+
+        logging.Logger.Info("trying to acquire lock", "session", sessionID)
+        _, release, errLock := lck.AcquireLock(cc, sessionID)
+        defer release()
+        if errLock != nil {
+            logging.Logger.Error("failed to acquire lock", "session", sessionID)
+            c.JSON(http.StatusInternalServerError, gin.H{
+				"error": fmt.Sprintf("failed to fetch container statuses of session %s", sessionName),
+			})
+			return
+        }
+        logging.Logger.Info("acquired lock successfully", "session", sessionID)
+
 		containerStatuses, err := ss.ContainerStatus(c.Request.Context(),kcs, sessionID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -125,6 +178,19 @@ func main() {
 	r.POST("/refresh/:sessionID", func(c *gin.Context) {
 		sessionName := strings.ReplaceAll(c.Param("sessionID"), "/", "")
         sessionID := fmt.Sprintf("session-%s", sessionName)
+
+        logging.Logger.Info("trying to acquire lock", "session", sessionID)
+        _, release, errLock := lck.AcquireLock(cc, sessionID)
+        defer release()
+        if errLock != nil {
+            logging.Logger.Error("failed to acquire lock", "session", sessionID)
+            c.JSON(http.StatusInternalServerError, gin.H{
+				"error": fmt.Sprintf("failed to refresh session %s", sessionName),
+			})
+			return
+        }
+        logging.Logger.Info("acquired lock successfully", "session", sessionID)
+
 		sessionInfo, err := ss.RefreshDeploy(c.Request.Context(),kcs, cc, sessionID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -141,6 +207,19 @@ func main() {
 	r.PATCH("/toggle/:sessionID", func(c *gin.Context) {
 		sessionName := strings.ReplaceAll(c.Param("sessionID"), "/", "")
         sessionID := fmt.Sprintf("session-%s", sessionName)
+
+        logging.Logger.Info("trying to acquire lock", "session", sessionID)
+        _, release, errLock := lck.AcquireLock(cc, sessionID)
+        defer release()
+        if errLock != nil {
+            logging.Logger.Error("failed to acquire lock", "session", sessionID)
+            c.JSON(http.StatusInternalServerError, gin.H{
+				"error": fmt.Sprintf("failed to toggle session %s", sessionName),
+			})
+			return
+        }
+        logging.Logger.Info("acquired lock successfully", "session", sessionID)
+
 		err := ss.ToggleDeploy(c.Request.Context(),kcs, cc, sessionID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -156,6 +235,31 @@ func main() {
 	r.DELETE("/:sessionID", func(c *gin.Context) {
 		sessionName := strings.ReplaceAll(c.Param("sessionID"), "/", "")
         sessionID := fmt.Sprintf("session-%s", sessionName)
+
+        logging.Logger.Info("trying to acquire lock", "session", sessionID)
+        _, releaseSession, errSessionLock := lck.AcquireLock(cc, sessionID)
+        defer releaseSession()
+        if errSessionLock != nil {
+            logging.Logger.Error("failed to acquire lock", "session", sessionID)
+            c.JSON(http.StatusInternalServerError, gin.H{
+				"error": fmt.Sprintf("failed to initialize session %s", sessionName),
+			})
+			return
+        }
+        logging.Logger.Info("acquired lock successfully", "session", sessionID)
+
+        logging.Logger.Info("trying to acquire ingress lock", "session", sessionID)
+        _, releaseIngress, errIngressLock := lck.AcquireLock(cc, "ingress")
+        defer releaseIngress()
+        if errIngressLock != nil {
+            logging.Logger.Error("failed to acquire ingress lock", "session", sessionID)
+            c.JSON(http.StatusInternalServerError, gin.H{
+				"error": fmt.Sprintf("failed to initialize session %s", sessionName),
+			})
+			return
+        }
+        logging.Logger.Info("acquired ingress lock successfully", "session", sessionID)
+
 		err := ss.DeleteDeploy(c.Request.Context(),kcs, cc, sessionID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
