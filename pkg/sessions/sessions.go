@@ -489,10 +489,8 @@ func DeleteDeploy(ctx context.Context, cs *kubernetes.Clientset, cc *clientv3.Cl
     if len(resp.Kvs) == 0 {
         return fmt.Errorf("session %s was not found", sessionID)
     }
-	var session SessionInfo
-	err = json.Unmarshal([]byte(resp.Kvs[0].Value), &session)
-	if err != nil {
-		// if the json unmarshalling fails then it's because the session was just initialized
+    if string(resp.Kvs[0].Value) == "{}" {
+		// session was just initialized
 		// we still need to delete the code editor's pvc
 		cs.CoreV1().PersistentVolumeClaims("default").Delete(
 			ctx,
@@ -504,7 +502,14 @@ func DeleteDeploy(ctx context.Context, cs *kubernetes.Clientset, cc *clientv3.Cl
 			ctx,
 			sessionID)
 		return err
+    }
+
+	var session SessionInfo
+	err = json.Unmarshal([]byte(resp.Kvs[0].Value), &session)
+	if err != nil {
+		return err
 	}
+
 	_, volumes, err := cmp.ParseComponents(session.Components, sessionID)
 	if err != nil {
 		return err
