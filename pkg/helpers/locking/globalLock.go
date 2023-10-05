@@ -32,6 +32,7 @@ func AcquireLock(client *clientv3.Client, lock string) (*clientv3.LeaseID, func(
 }
 
 func acquireLockOnce(client *clientv3.Client, lock string) (*clientv3.LeaseID, func() error, error) {
+    lock = fmt.Sprintf("lock-%s", lock)
 	leaseResp, err := client.Grant(context.Background(), 10) // Set TTL as needed
 	if err != nil {
 		return nil, nil, err
