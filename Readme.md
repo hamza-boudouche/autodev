@@ -16,6 +16,7 @@ A tool that automates the creation of development environments on the cloud, pow
 - [Table of contents](#table-of-contents)
 - [Motivation](#motivation)
 - [Features](#features)
+- [Architecture](#architecture)
 - [Scope](#scope)
 - [Usage](#usage)
   - [Setup](#setup)
@@ -58,7 +59,7 @@ where it's deployed.
 Using AutoDev, you can create sessions that represent development environments.
 Each session is composed of a number of components that represent the development
 tools that are needed to work on the project in question. These are processes like
-an online IDE, a database, a cache server, a self hosted 3rd partie service ...
+an online IDE, a database, a cache server, a self hosted 3rd party service ...
 Each session has persistant storage where the developer can store code, configuration
 files, db data ...The sessions can be stopped or deleted just like most cloud
 resources you can manage on public cloud providers.
@@ -76,6 +77,9 @@ based code editors (or IDEs) that are preconfigured with the tools that you requ
 and its simplicity, because it makes the provisioned environment very similar to
 what a traditional equivalent local environment would be (with all of the
 requested services accessible on localhost).
+
+# Architecture
+![Architecture diagram](./images/arch.png)
 
 
 # Scope
@@ -95,26 +99,17 @@ missing functionalities.
 ### Development
 
 By default (on non-production environments), AutoDev will attempt to connect to
-a Redis database on localhost:6379. To set it up either install Redis on your
+an etcd database on localhost:2379. To set it up either install etcd on your
 local machine or start it inside a docker container using the following command:
 
 ```bash
-docker run -d -p 6379:6379 --name myredis redis
-```
-
-To override this behavior and provide a custom Redis address, port, and password,
-you need to set the following environment variables:
-
-```bash
-export AUTODEV_ENV="production"
-export AUTODEV_REDIS_ADDR="redis.server.address:port"
-export AUTODEV_REDIS_PASSWORD="redispassword"
+docker run -d -p 2379:2379 -p 2380:2380 -e ALLOW_NONE_AUTHENTICATION=yes --name Etcd bitnami/etcd
 ```
 
 Your must also configure `kubectl` access to a Kubernetes cluster that you want
 AutoDev to create resources in. You will need the following permissions in the
 `default` namespace of this cluster:
-- On `Pods`: `["get", "delete", "list", "create"]`
+- On `Deployments`: `["get", "delete", "list", "create"]`
 - On `Services`: `["get", "delete", "create"]`
 - On `Ingresses`: `["get", "update"]`
 
@@ -219,7 +214,7 @@ The response will look like this:
 }
 ```
 
-Notice the Url of the code editor; you can use it to access the session using a
+Notice the URL of the code editor; you can use it to access the session using a
 GUI similar to VsCode directly from your browser, without installing any
 additional tools.
 
