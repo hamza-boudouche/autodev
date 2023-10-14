@@ -71,12 +71,12 @@ compute intensive workloads without sacrificing productivity.
 AutoDev exposes a REST API that makes it possible to manage sessions by sending
 HTTP requests. The OpenAPI documentation of AutoDev will soon be released.
 
-The features that distinguishe AutoDev from cloud providers, that are also capable
+The features that distinguishe AutoDev from public cloud providers, that are also capable
 of creating databases and servers automatically, are its ability to provide browser
 based code editors (or IDEs) that are preconfigured with the tools that you requested,
 and its simplicity, because it makes the provisioned environment very similar to
 what a traditional equivalent local environment would be (with all of the
-requested services accessible on localhost).
+requested services accessible on localhost from within the in-browser IDE).
 
 # Architecture
 ![Architecture diagram](./images/arch.png)
@@ -89,7 +89,7 @@ session quotas...The only things that it manages are the sessions (aka developme
 environments) and their underlying Kubernetes resources. This means that for
 production use cases, it must be deployed either as a microservice inside a
 project, or behind an ApiGateway that acts as a middleware for managing these
-missing functionalities.
+out of scope functionalities.
 
 
 # Usage
