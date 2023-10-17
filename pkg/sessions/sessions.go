@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	cmp "github.com/hamza-boudouche/autodev/pkg/components"
+	"github.com/hamza-boudouche/autodev/pkg/helpers/consistency"
 	"github.com/hamza-boudouche/autodev/pkg/helpers/k8s"
 	"github.com/hamza-boudouche/autodev/pkg/helpers/logging"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -36,25 +37,66 @@ type SessionInfo struct {
 func InitSession(ctx context.Context, cc *clientv3.Client, kcs *kubernetes.Clientset, sessionID string) error {
 	logging.Logger.Info("initializing session", "sessionID", sessionID)
 
-	txn := cc.Txn(ctx)
-	txnResp, err := txn.If(
-		clientv3.Compare(clientv3.CreateRevision(sessionID), "=", 0), // Check if key doesn't exist
-	).Then(
-		clientv3.OpPut(sessionID, "{}"),
-	).Commit()
+	initSessionKey := func(ctx context.Context) (context.Context, func(context.Context), error) {
+		txn := cc.Txn(ctx)
+		txnResp, err := txn.If(
+			clientv3.Compare(clientv3.CreateRevision(sessionID), "=", 0), // Check if key doesn't exist
+		).Then(
+			clientv3.OpPut(sessionID, "{}"),
+		).Commit()
+
+		if err != nil {
+			logging.Logger.Error("some error (other than key already exists) occured", "sessionID", sessionID)
+			return ctx, nil, err
+		}
+
+		if !txnResp.Succeeded {
+			logging.Logger.Info("session was found, no need to initialize again", "sessionID", sessionID)
+			return ctx, nil, fmt.Errorf("session %s already exists", sessionID)
+		}
+
+		ctx = context.WithValue(ctx, "keyWritten", true)
+		logging.Logger.Info("key written to etcd successfully while initializing session", "sessionID", sessionID)
+
+		cancel := func(ctx context.Context) {
+			logging.Logger.Info("rolling back the write of the etcd key for session initialization", "sessionID", sessionID)
+			if keyWritten, ok := ctx.Value("keyWritten").(bool); ok {
+				if keyWritten {
+					cc.Delete(ctx, sessionID)
+				}
+			} else {
+				logging.Logger.Error("context is corrupted", "sessionID", sessionID)
+			}
+		}
+
+		return ctx, cancel, nil
+	}
+
+	createSessionPVC := func(ctx context.Context) (context.Context, func(context.Context), error) {
+        err := k8s.CreatePVC(ctx, kcs, sessionID, "10Mi")
+        if err != nil {
+			logging.Logger.Error("failed to create PVC while initializing session", "sessionID", sessionID)
+            return ctx, nil, err
+        }
+
+		logging.Logger.Info("created PVC successfully while initializing session", "sessionID", sessionID)
+
+        cancel := func(ctx context.Context) {
+            // TODO: Implement this later (not needed because it's the last transaction in the saga)
+        }
+
+        return ctx, cancel, nil
+    }
+
+	s := consistency.Saga([]consistency.Transaction{initSessionKey, createSessionPVC})
+
+	_, err := s.Run()
 
 	if err != nil {
-		logging.Logger.Error("some error (other than key already exists) occured", "sessionID", sessionID)
-		return err
+		logging.Logger.Error("initializing session failed", "sessionID", sessionID)
 	}
 
-	if !txnResp.Succeeded {
-		logging.Logger.Info("session was found, no need to initialize again", "sessionID", sessionID)
-		return fmt.Errorf("session %s already exists", sessionID)
-	}
-
-	logging.Logger.Info("key written to etcd successfully while initializing session", "sessionID", sessionID)
-	return k8s.CreatePVC(ctx, kcs, sessionID, "10Mi")
+	return err
 }
 
 func exposeSession(ctx context.Context, cs *kubernetes.Clientset, sessionID string, components []cmp.Component, ingressName string) ([]cmp.Component, error) {
